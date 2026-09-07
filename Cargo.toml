@@ -1,0 +1,11 @@
+[package]
+name = "tabmux"
+version = "0.1.0"
+edition = "2021"
+description = "Isolated tmux with a bottom session tab bar"
+license = "MIT"
+authors = ["JC <me@junchaw.com>"]
+repository = "https://github.com/junchaw/tabmux"
+
+[dependencies]
+libc = "0.2"
