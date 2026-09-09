@@ -33,7 +33,24 @@ tabmux              # attach (creates the server if needed)
 tabmux ls           # list sessions
 tabmux new [name]   # create and switch
 tabmux close [name] # kill a session (keeps the last one)
+tabmux status <busy|attention|idle> [session]
+                    # set a session's status dot; session defaults to the calling pane's
 ```
+
+## Status dot
+
+A session's tab can show a colored dot to signal what a long-running process
+(an agent, a build, anything) is doing:
+
+```sh
+tabmux status busy       # yellow dot, e.g. before a long task starts
+tabmux status attention  # red dot, e.g. needs input or failed
+tabmux status idle       # clears the dot
+```
+
+Run without a session argument, this reads the session from the calling pane
+(`$TMUX_PANE`), so a script running inside a tab can just call `tabmux status busy`
+on its own behalf. Status is stored per-session in `~/.config/tabmux/status/`.
 
 ## Inside the app
 

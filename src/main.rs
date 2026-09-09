@@ -6,7 +6,7 @@ mod tmux;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
-use actions::{cmd_close, cmd_new, cmd_nth};
+use actions::{cmd_close, cmd_new, cmd_nth, cmd_status};
 use bar::{cmd_click, cmd_click_close, cmd_render, cmd_render_msgs};
 use menu::cmd_menu;
 use tmux::{
@@ -122,6 +122,8 @@ tabmux — isolated tmux with a bottom session tab bar
   tabmux ls           list sessions
   tabmux new [name]   create and switch
   tabmux close [name] kill session
+  tabmux status <busy|attention|idle> [session]
+                      set a session's status dot (defaults to the calling pane's session)
 
 Inside the app:
   Ctrl-b                 command menu
@@ -188,6 +190,13 @@ fn main() {
         }
         "menu" => cmd_menu(opt(rest.first())),
         "ls" => cmd_ls(),
+        "status" => {
+            let Some(state) = rest.first() else {
+                usage();
+                std::process::exit(2);
+            };
+            cmd_status(state, opt(rest.get(1)), None);
+        }
         _ => {
             usage();
             std::process::exit(2);

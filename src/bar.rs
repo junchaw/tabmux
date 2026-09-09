@@ -1,8 +1,10 @@
-use crate::actions::{cmd_close, fmt_age, load_messages, start_flash};
+use crate::actions::{cmd_close, fmt_age, load_messages, read_status, start_flash};
 use crate::tmux::{
     list_sessions, sty, switch_to, ACTIVE_BG, ACTIVE_FG, HINT, HINT_BG, HINT_FG, INACTIVE_BG,
-    INACTIVE_FG, MSG_BG, MSG_FG, MSG_SEP,
+    INACTIVE_FG, MSG_BG, MSG_FG, MSG_SEP, STATUS_ATTENTION_FG, STATUS_BUSY_FG,
 };
+
+const STATUS_DOT: &str = "\u{25cf}";
 
 fn display_name(name: &str) -> String {
     if let Some(pos) = name.rfind("-claude") {
@@ -133,12 +135,23 @@ pub fn cmd_render(width: usize, current: &str) {
     }
     let mut out = String::new();
     for (i, (name, w)) in names.iter().zip(widths.iter()).enumerate() {
-        let label = label_for(i, name, *w);
-        if name == current {
-            out.push_str(&sty(ACTIVE_BG, ACTIVE_FG, &label, true));
+        let (bg, fg, bold) = if name == current {
+            (ACTIVE_BG, ACTIVE_FG, true)
         } else {
-            out.push_str(&sty(INACTIVE_BG, INACTIVE_FG, &label, false));
+            (INACTIVE_BG, INACTIVE_FG, false)
+        };
+        let status = read_status(name);
+        let has_dot = status.is_some() && *w > 3;
+        let label_w = if has_dot { w - 1 } else { *w };
+        if has_dot {
+            let dot_fg = match status.as_deref() {
+                Some("busy") => STATUS_BUSY_FG,
+                Some("attention") => STATUS_ATTENTION_FG,
+                _ => fg,
+            };
+            out.push_str(&sty(bg, dot_fg, STATUS_DOT, bold));
         }
+        out.push_str(&sty(bg, fg, &label_for(i, name, label_w), bold));
     }
     let used: usize = widths.iter().sum();
     if used < width {
