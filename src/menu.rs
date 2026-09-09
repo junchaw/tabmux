@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 
-use crate::actions::{cmd_close, cmd_new, cmd_nth, start_flash};
+use crate::actions::{cmd_close, cmd_new, cmd_nth, cmd_rename, start_flash};
 use crate::tmux::{launcher, list_sessions, tmux, unique_name};
 
 pub fn popup_menu(client: Option<&str>) {
@@ -84,11 +84,13 @@ fn term_size() -> (usize, usize) {
 
 fn prompt_new_session_name() -> String {
     let default = unique_name();
+    prompt_text("new session", &format!("empty uses {default}"))
+}
+
+fn prompt_text(title: &str, hint: &str) -> String {
     let mut buf = String::new();
     loop {
         let (cols, rows) = term_size();
-        let title = "new session";
-        let hint = format!("empty uses {default}");
         let box_w = 44.min(28.max(cols.saturating_sub(8)).max(hint.len() + 2));
         let mut shown = buf.clone();
         if shown.chars().count() > box_w.saturating_sub(9) {
@@ -148,6 +150,7 @@ pub fn cmd_menu(client: Option<&str>) {
         ("x", "close the current session"),
         ("q", "close this menu"),
         ("n", "create a new session"),
+        ("r", "rename the current session"),
         ("d", "detach (tabmux keeps running)"),
     ];
     let mut switches: Vec<(String, String)> = Vec::new();
@@ -202,6 +205,23 @@ pub fn cmd_menu(client: Option<&str>) {
                 start_flash("won't close last session", client);
             }
         }
+        'r' => {
+            let sess = if current.is_empty() {
+                client_session(client)
+            } else {
+                current
+            };
+            if sess.is_empty() {
+                start_flash("unknown action (r)", client);
+            } else {
+                let new_name = prompt_text("rename session", &format!("empty keeps {sess}"));
+                match cmd_rename(&sess, &new_name, client) {
+                    Ok(()) if new_name.trim().is_empty() || new_name.trim() == sess => {}
+                    Ok(()) => start_flash(&format!("renamed {sess} to {}", new_name.trim()), client),
+                    Err(e) => start_flash(&e, client),
+                }
+            }
+        }
         '1'..='9' => {
             let idx = ch.to_digit(10).unwrap() as usize;
             let names = list_sessions();
@@ -209,7 +229,7 @@ pub fn cmd_menu(client: Option<&str>) {
             if idx >= 1 && idx <= names.len() {
                 start_flash(&format!("switched to {}", names[idx - 1]), client);
             } else {
-                start_flash("unknown action", client);
+                start_flash(&format!("unknown action ({ch})"), client);
             }
         }
         'p' => {
@@ -227,6 +247,7 @@ pub fn cmd_menu(client: Option<&str>) {
                 tmux(&["detach-client"]);
             }
         }
-        _ => start_flash("unknown action", client),
+        '\0' => {}
+        _ => start_flash(&format!("unknown action ({ch})"), client),
     }
 }

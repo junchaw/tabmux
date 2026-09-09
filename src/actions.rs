@@ -145,6 +145,30 @@ pub fn cmd_status(state: &str, session: Option<&str>, client: Option<&str>) {
     }
 }
 
+/// Renames `old` to `new_name`. Returns an error message on failure, None on success.
+pub fn cmd_rename(old: &str, new_name: &str, _client: Option<&str>) -> Result<(), String> {
+    let new_name = new_name.trim();
+    if new_name.is_empty() {
+        return Err("name can't be empty".into());
+    }
+    if new_name == old {
+        return Ok(());
+    }
+    if tmux_ok(&["has-session", "-t", &format!("={new_name}")]) {
+        return Err(format!("{new_name} already exists"));
+    }
+    if !tmux_ok(&["rename-session", "-t", &format!("={old}"), new_name]) {
+        return Err(format!("failed to rename {old}"));
+    }
+    if let Ok(state) = std::fs::read_to_string(status_path(old)) {
+        let new_path = status_path(new_name);
+        ensure_dir(&new_path);
+        let _ = std::fs::write(&new_path, state);
+    }
+    let _ = std::fs::remove_file(status_path(old));
+    Ok(())
+}
+
 pub fn cmd_nth(index: usize, client: Option<&str>) {
     let names = list_sessions();
     if index >= 1 && index <= names.len() {
