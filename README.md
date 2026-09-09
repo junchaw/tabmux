@@ -35,6 +35,7 @@ tabmux new [name]   # create and switch
 tabmux close [name] # kill a session (keeps the last one)
 tabmux status <busy|attention|idle> [session]
                     # set a session's status dot; session defaults to the calling pane's
+tabmux save         # snapshot session names/paths (also done automatically)
 ```
 
 ## Status dot
@@ -51,6 +52,14 @@ tabmux status idle       # clears the dot
 Run without a session argument, this reads the session from the calling pane
 (`$TMUX_PANE`), so a script running inside a tab can just call `tabmux status busy`
 on its own behalf. Status is stored per-session in `~/.config/tabmux/status/`.
+
+## Restoring sessions after a restart
+
+tabmux keeps a snapshot of each session's name and working directory in
+`~/.config/tabmux/sessions`, updated on new/close/rename and on detach. If
+the tmux server itself goes away (`kill-server`, reboot, crash), the next
+`tabmux` attach recreates each session at its saved path. This restores
+layout only, not what was running in the pane.
 
 ## Inside the app
 

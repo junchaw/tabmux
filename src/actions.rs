@@ -1,8 +1,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::tmux::{
-    current_session_from_pane, ensure_dir, list_sessions, msg_path, status_path, switch_to, tmux,
-    tmux_ok, unique_name,
+    current_session_from_pane, ensure_dir, list_sessions, msg_path, session_path, sessions_path,
+    status_path, switch_to, tmux, tmux_ok, unique_name,
 };
 
 pub const MSG_KEEP: usize = 40;
@@ -72,6 +72,36 @@ pub fn start_flash(msg: &str, client: Option<&str>) {
     }
 }
 
+/// Snapshots each session's name and working directory to disk, so a fresh
+/// server (e.g. after a reboot) can recreate them at the same paths.
+pub fn save_snapshot() {
+    let names = list_sessions();
+    let body: String = names
+        .iter()
+        .filter_map(|name| session_path(name).map(|path| format!("{name}\t{path}\n")))
+        .collect();
+    let path = sessions_path();
+    ensure_dir(&path);
+    let _ = std::fs::write(&path, body);
+}
+
+/// Loads the last-saved (name, path) pairs, in original creation order.
+pub fn load_snapshot() -> Vec<(String, String)> {
+    let Ok(raw) = std::fs::read_to_string(sessions_path()) else {
+        return Vec::new();
+    };
+    raw.lines()
+        .filter_map(|line| {
+            let (name, path) = line.split_once('\t')?;
+            if name.is_empty() || path.is_empty() {
+                None
+            } else {
+                Some((name.to_string(), path.to_string()))
+            }
+        })
+        .collect()
+}
+
 pub fn cmd_new(name: &str, client: Option<&str>) -> (String, bool) {
     let mut name = name.trim().to_string();
     if name.is_empty() {
@@ -80,6 +110,7 @@ pub fn cmd_new(name: &str, client: Option<&str>) -> (String, bool) {
     let created = !tmux_ok(&["has-session", "-t", &format!("={name}")]);
     if created {
         tmux(&["new-session", "-d", "-s", &name]);
+        save_snapshot();
     }
     switch_to(&name, client);
     (name, created)
@@ -102,6 +133,7 @@ pub fn cmd_close(name: &str, client: Option<&str>) -> Option<String> {
     switch_to(&prev, client);
     tmux(&["kill-session", "-t", &format!("={name}")]);
     let _ = std::fs::remove_file(status_path(name));
+    save_snapshot();
     Some(prev)
 }
 
@@ -166,6 +198,7 @@ pub fn cmd_rename(old: &str, new_name: &str, _client: Option<&str>) -> Result<()
         let _ = std::fs::write(&new_path, state);
     }
     let _ = std::fs::remove_file(status_path(old));
+    save_snapshot();
     Ok(())
 }
 

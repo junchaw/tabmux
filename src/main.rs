@@ -6,7 +6,7 @@ mod tmux;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
-use actions::{cmd_close, cmd_new, cmd_nth, cmd_status};
+use actions::{cmd_close, cmd_new, cmd_nth, cmd_status, load_snapshot, save_snapshot};
 use bar::{cmd_click, cmd_click_close, cmd_render, cmd_render_msgs};
 use menu::cmd_menu;
 use tmux::{
@@ -47,6 +47,7 @@ set -g status-format[1] "#[align=left fill=@MSG_BG@]#(@EXE@ render-msgs #{client
 set-hook -gu session-created
 set-hook -gu session-closed
 set-hook -gu client-session-changed
+set-hook -g client-detached "run-shell \"@EXE@ save\""
 
 unbind-key -n MouseDown3StatusLeft
 unbind-key -n MouseDown3StatusRight
@@ -74,9 +75,26 @@ fn ensure_server() {
         return;
     }
     let conf = conf_path().display().to_string();
-    let _ = std::process::Command::new("tmux")
-        .args(["-L", SOCKET, "-f", &conf, "new-session", "-d", "-s", "main"])
-        .status();
+    let snapshot = load_snapshot();
+    let mut sessions = snapshot.into_iter();
+    match sessions.next() {
+        Some((name, path)) => {
+            let _ = std::process::Command::new("tmux")
+                .args(["-L", SOCKET, "-f", &conf, "new-session", "-d", "-s", &name, "-c", &path])
+                .status();
+            for (name, path) in sessions {
+                if !tmux_ok(&["has-session", "-t", &format!("={name}")]) {
+                    tmux(&["new-session", "-d", "-s", &name, "-c", &path]);
+                }
+            }
+        }
+        None => {
+            let _ = std::process::Command::new("tmux")
+                .args(["-L", SOCKET, "-f", &conf, "new-session", "-d", "-s", "main"])
+                .status();
+        }
+    }
+    save_snapshot();
 }
 
 fn inside_this_server() -> bool {
@@ -124,6 +142,7 @@ tabmux — isolated tmux with a bottom session tab bar
   tabmux close [name] kill session
   tabmux status <busy|attention|idle> [session]
                       set a session's status dot (defaults to the calling pane's session)
+  tabmux save         snapshot session names/paths for restore after a restart
 
 Inside the app:
   Ctrl-b                 command menu
@@ -197,6 +216,7 @@ fn main() {
             };
             cmd_status(state, opt(rest.get(1)), None);
         }
+        "save" => save_snapshot(),
         _ => {
             usage();
             std::process::exit(2);

@@ -35,6 +35,27 @@ pub fn status_path(session: &str) -> PathBuf {
     status_dir().join(session)
 }
 
+pub fn sessions_path() -> PathBuf {
+    conf_dir().join("sessions")
+}
+
+/// Working directory of a session's first pane, if it exists.
+pub fn session_path(session: &str) -> Option<String> {
+    let out = tmux_stdout(&[
+        "display-message",
+        "-p",
+        "-t",
+        &format!("={session}:0.0"),
+        "#{pane_current_path}",
+    ]);
+    let out = out.trim();
+    if out.is_empty() {
+        None
+    } else {
+        Some(out.to_string())
+    }
+}
+
 /// Session that owns the calling pane, when invoked from inside a tabmux pane.
 pub fn current_session_from_pane() -> Option<String> {
     let pane = std::env::var("TMUX_PANE").ok()?;
