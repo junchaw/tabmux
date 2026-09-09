@@ -1,11 +1,12 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::tmux::{
-    ensure_dir, list_sessions, msg_path, session_path, sessions_path, switch_to, tmux, tmux_ok,
-    unique_name,
+    current_session_from_pane, ensure_dir, list_sessions, msg_path, session_path, sessions_path,
+    status_path, switch_to, tmux, tmux_ok, unique_name,
 };
 
 pub const MSG_KEEP: usize = 40;
+pub const STATUS_STATES: &[&str] = &["busy", "attention", "idle"];
 
 pub fn now_secs() -> f64 {
     SystemTime::now()
@@ -159,6 +160,12 @@ pub fn cmd_rename(old: &str, new_name: &str, _client: Option<&str>) -> Result<()
     if !tmux_ok(&["rename-session", "-t", &format!("={old}"), new_name]) {
         return Err(format!("failed to rename {old}"));
     }
+    if let Ok(state) = std::fs::read_to_string(status_path(old)) {
+        let new_path = status_path(new_name);
+        ensure_dir(&new_path);
+        let _ = std::fs::write(&new_path, state);
+    }
+    let _ = std::fs::remove_file(status_path(old));
     save_snapshot();
     Ok(())
 }
@@ -168,6 +175,46 @@ pub fn cmd_move(session: &str, delta: i32) -> Result<Vec<String>, String> {
     let group = crate::groups::group_of_session(session)
         .unwrap_or_else(|| crate::groups::DEFAULT_GROUP.to_string());
     crate::groups::move_member(&group, session, delta)
+}
+
+/// Reads the last-reported status for a session ("busy" / "attention"),
+/// or None when idle / never reported.
+pub fn read_status(session: &str) -> Option<String> {
+    let raw = std::fs::read_to_string(status_path(session)).ok()?;
+    let state = raw.trim().to_string();
+    if state.is_empty() || state == "idle" {
+        None
+    } else {
+        Some(state)
+    }
+}
+
+pub fn cmd_status(state: &str, session: Option<&str>, client: Option<&str>) {
+    let state = state.trim();
+    if !STATUS_STATES.contains(&state) {
+        eprintln!("unknown status {state:?}, expected one of {STATUS_STATES:?}");
+        std::process::exit(2);
+    }
+    let Some(session) = session
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(current_session_from_pane)
+    else {
+        eprintln!("tabmux status: not inside a tabmux pane, pass a session name");
+        std::process::exit(2);
+    };
+    let path = status_path(&session);
+    if state == "idle" {
+        let _ = std::fs::remove_file(&path);
+    } else {
+        ensure_dir(&path);
+        let _ = std::fs::write(&path, state);
+    }
+    if let Some(c) = client.filter(|s| !s.is_empty()) {
+        tmux(&["refresh-client", "-S", "-t", c]);
+    } else {
+        tmux(&["refresh-client", "-S"]);
+    }
 }
 
 pub fn cmd_nth(names: &[String], index: usize, client: Option<&str>) {

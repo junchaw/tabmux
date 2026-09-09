@@ -7,7 +7,7 @@ mod tmux;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
-use actions::{cmd_move, cmd_new, cmd_nth, cmd_rename, load_snapshot, save_snapshot};
+use actions::{cmd_move, cmd_new, cmd_nth, cmd_rename, cmd_status, load_snapshot, save_snapshot};
 use bar::{cmd_click, cmd_click_close, cmd_render, cmd_render_msgs};
 use groups::{close_group, ensure_group, group_of_session, last_used_member, list_groups, members_for, rename_member, DEFAULT_GROUP};
 use menu::cmd_menu;
@@ -157,6 +157,8 @@ Sub-sessions (tabs within the current group):
   tabmux rename [old] <new>  rename a session (old defaults to current)
   tabmux move up|down [session]
                              move a session one slot in the current group
+  tabmux status <busy|attention|idle> [session]
+                      set a session's status dot (defaults to the calling pane's session)
   tabmux save         snapshot session names/paths for restore after a restart
 
 Inside the app:
@@ -283,6 +285,13 @@ fn main() {
         }
         "menu" => cmd_menu(opt(rest.first())),
         "ls" => cmd_ls(),
+        "status" => {
+            let Some(state) = rest.first() else {
+                usage();
+                std::process::exit(2);
+            };
+            cmd_status(state, opt(rest.get(1)), None);
+        }
         "save" => save_snapshot(),
         _ => {
             usage();

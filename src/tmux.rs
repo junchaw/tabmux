@@ -12,6 +12,8 @@ pub const HINT_FG: &str = "colour235";
 pub const MSG_SEP: &str = " | ";
 pub const MSG_BG: &str = "#2e3440";
 pub const MSG_FG: &str = "#d8dee9";
+pub const STATUS_BUSY_FG: &str = "colour221";
+pub const STATUS_ATTENTION_FG: &str = "colour196";
 
 pub fn conf_dir() -> PathBuf {
     dirs_next_home().join(".config/tabmux")
@@ -65,6 +67,14 @@ pub fn group_path(group: &str) -> PathBuf {
     groups_dir().join(group)
 }
 
+pub fn status_dir() -> PathBuf {
+    conf_dir().join("status")
+}
+
+pub fn status_path(session: &str) -> PathBuf {
+    status_dir().join(session)
+}
+
 /// Working directory of a session's first pane, if it exists.
 pub fn session_path(session: &str) -> Option<String> {
     let out = tmux_stdout(&[
@@ -79,7 +89,20 @@ pub fn session_path(session: &str) -> Option<String> {
         None
     } else {
         Some(out.to_string())
-    }}
+    }
+}
+
+/// Session that owns the calling pane, when invoked from inside a tabmux pane.
+pub fn current_session_from_pane() -> Option<String> {
+    let pane = std::env::var("TMUX_PANE").ok()?;
+    let out = tmux_stdout(&["display-message", "-p", "-t", &pane, "#{session_name}"]);
+    let out = out.trim();
+    if out.is_empty() {
+        None
+    } else {
+        Some(out.to_string())
+    }
+}
 
 fn dirs_next_home() -> PathBuf {
     std::env::var_os("HOME")

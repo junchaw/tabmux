@@ -38,12 +38,29 @@ tabmux rename [old] <new>
                     # rename a session; old defaults to the current session
 tabmux move up|down [session]
                     # move a session one slot in the current group
+tabmux status <busy|attention|idle> [session]
+                    # set a session's status dot; session defaults to the calling pane's
 tabmux save         # snapshot session names/paths (also done automatically)
 ```
 
 Each group is its own set of tabs. `tabmux attach new` opens (or creates) the
 `new` group without touching `default`. New tabs in a named group are
 `{group}-s1`, `{group}-s2`, …; `default` still uses `s1`, `s2`.
+
+## Status dot
+
+A session's tab can show a colored dot to signal what a long-running process
+(an agent, a build, anything) is doing:
+
+```sh
+tabmux status busy       # yellow dot, e.g. before a long task starts
+tabmux status attention  # red dot, e.g. needs input or failed
+tabmux status idle       # clears the dot
+```
+
+Run without a session argument, this reads the session from the calling pane
+(`$TMUX_PANE`), so a script running inside a tab can just call `tabmux status busy`
+on its own behalf. Status is stored per-session in `~/.config/tabmux/status/`.
 
 ## Restoring sessions after a restart
 
