@@ -57,6 +57,9 @@ tabmux status review     # any other name: cyan unless mapped
 Without a session argument this uses `$TMUX_PANE`. Extra names and colors go in
 `~/.config/tabmux/status-colors` (`name colour196` per line).
 
+To drive the dot from [pi](https://github.com/badlogic/pi-mono) automatically,
+install the extension in `docs/pi.md` (template: `contrib/pi/tabmux.ts`).
+
 ## Restoring sessions after a restart
 
 tabmux keeps each session's name and working directory in
