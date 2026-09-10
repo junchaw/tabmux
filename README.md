@@ -29,16 +29,11 @@ Requires Rust 1.70+ and tmux 3.2+.
 ## Usage
 
 ```
-tabmux              # attach to the default group (creates server/group if needed)
-tabmux attach [xx]  # attach to group xx
+tabmux              # attach to the default group
+tabmux attach [xx]  # attach to group xx (no name = default)
 tabmux ls           # list groups
-tabmux close [xx]   # kill a group and all its sessions
-tabmux new [name]   # create a tab in the current group
-tabmux rename [old] <new>
-                    # rename a session; old defaults to the current session
-tabmux move up|down [session]
-                    # move a session one slot in the current group
-tabmux save         # snapshot session names/paths (also done automatically)
+tabmux close <xx>   # kill group xx and all its sessions
+tabmux save         # write session names and cwd (also on detach) so a restart can recreate tabs
 ```
 
 Each group is its own set of tabs. `tabmux attach new` opens (or creates) the
@@ -47,26 +42,12 @@ Each group is its own set of tabs. `tabmux attach new` opens (or creates) the
 
 ## Restoring sessions after a restart
 
-tabmux keeps a snapshot of each session's name and working directory in
-`~/.config/tabmux/sessions`, updated on new/close/rename and on detach. If
-the tmux server itself goes away (`kill-server`, reboot, crash), the next
-`tabmux` attach recreates each session at its saved path. This restores
-layout only, not what was running in the pane.
+tabmux keeps each session's name and working directory in
+`~/.config/tabmux/sessions`. `tabmux save` writes that file; detach does too.
+If the tmux server is gone (`kill-server`, reboot, crash), the next attach
+recreates each session at its saved path. Layout only — not what was running
+in the pane.
 
 ## Inside the app
 
-| Key | Action |
-|---|---|
-| `Ctrl-b` | full-screen command menu |
-| left-click a tab | switch session |
-| right-click a tab | close session |
-| `n` | new session |
-| `r` | rename current session |
-| `m` | reorder sessions (`j`/`k` or arrows, Enter to save) |
-| `x` | close current session |
-| `1`–`9` | jump to nth tab |
-| `p` | previous session |
-| `d` | detach |
-| `q` / `Esc` | close the menu |
-
-The bottom row is a right-aligned message ticker (`Try Ctrl+B` stays pinned on the left).
+Press `Ctrl-b` for the command menu.
