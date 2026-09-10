@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 
-use crate::actions::{cmd_close, cmd_new, cmd_nth, start_flash};
+use crate::actions::{cmd_close, cmd_new, cmd_nth, cmd_rename, start_flash};
 use crate::tmux::{launcher, list_sessions, tmux, unique_name};
 
 pub fn popup_menu(client: Option<&str>) {
@@ -8,7 +8,17 @@ pub fn popup_menu(client: Option<&str>) {
     let mut args: Vec<&str> = vec!["display-popup", "-B", "-w", "100%", "-h", "100%", "-E"];
     let cmd = match client.filter(|s| !s.is_empty()) {
         Some(c) => {
-            args = vec!["display-popup", "-c", c, "-B", "-w", "100%", "-h", "100%", "-E"];
+            args = vec![
+                "display-popup",
+                "-c",
+                c,
+                "-B",
+                "-w",
+                "100%",
+                "-h",
+                "100%",
+                "-E",
+            ];
             format!("{exe} menu {c}")
         }
         None => format!("{exe} menu"),
@@ -84,15 +94,21 @@ fn term_size() -> (usize, usize) {
 
 fn prompt_new_session_name() -> String {
     let default = unique_name();
+    prompt_text("new session", &format!("empty uses {default}"))
+}
+
+fn prompt_text(title: &str, hint: &str) -> String {
     let mut buf = String::new();
     loop {
         let (cols, rows) = term_size();
-        let title = "new session";
-        let hint = format!("empty uses {default}");
         let box_w = 44.min(28.max(cols.saturating_sub(8)).max(hint.len() + 2));
         let mut shown = buf.clone();
         if shown.chars().count() > box_w.saturating_sub(9) {
-            shown = shown.chars().rev().take(box_w.saturating_sub(9)).collect::<String>();
+            shown = shown
+                .chars()
+                .rev()
+                .take(box_w.saturating_sub(9))
+                .collect::<String>();
             shown = shown.chars().rev().collect();
         }
         let field = format!(" name: {shown}_");
@@ -100,7 +116,11 @@ fn prompt_new_session_name() -> String {
             format!("┌{}┐", "─".repeat(box_w)),
             format!("│{:^width$}│", title, width = box_w),
             format!("│{}│", " ".repeat(box_w)),
-            format!("│{:<width$}│", field.chars().take(box_w).collect::<String>(), width = box_w),
+            format!(
+                "│{:<width$}│",
+                field.chars().take(box_w).collect::<String>(),
+                width = box_w
+            ),
             format!("│{:^width$}│", hint, width = box_w),
             format!("└{}┘", "─".repeat(box_w)),
         ];
@@ -148,6 +168,7 @@ pub fn cmd_menu(client: Option<&str>) {
         ("x", "close the current session"),
         ("q", "close this menu"),
         ("n", "create a new session"),
+        ("r", "rename the current session"),
         ("d", "detach (tabmux keeps running)"),
     ];
     let mut switches: Vec<(String, String)> = Vec::new();
@@ -200,6 +221,25 @@ pub fn cmd_menu(client: Option<&str>) {
                 start_flash(&format!("closed {sess}"), client);
             } else {
                 start_flash("won't close last session", client);
+            }
+        }
+        'r' => {
+            let sess = if current.is_empty() {
+                client_session(client)
+            } else {
+                current
+            };
+            if sess.is_empty() {
+                start_flash("nothing to rename", client);
+            } else {
+                let new_name = prompt_text("rename session", &format!("empty keeps {sess}"));
+                match cmd_rename(&sess, &new_name, client) {
+                    Ok(()) if new_name.trim().is_empty() || new_name.trim() == sess => {}
+                    Ok(()) => {
+                        start_flash(&format!("renamed {sess} to {}", new_name.trim()), client)
+                    }
+                    Err(e) => start_flash(&e, client),
+                }
             }
         }
         '1'..='9' => {

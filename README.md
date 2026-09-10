@@ -33,6 +33,8 @@ tabmux              # attach (creates the server if needed)
 tabmux ls           # list sessions
 tabmux new [name]   # create and switch
 tabmux close [name] # kill a session (keeps the last one)
+tabmux rename [old] <new>
+                    # rename a session; old defaults to the current session
 ```
 
 ## Inside the app
@@ -43,6 +45,7 @@ tabmux close [name] # kill a session (keeps the last one)
 | left-click a tab | switch session |
 | right-click a tab | close session |
 | `n` | new session |
+| `r` | rename current session |
 | `x` | close current session |
 | `1`–`9` | jump to nth tab |
 | `p` | previous session |

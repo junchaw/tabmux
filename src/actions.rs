@@ -1,8 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::tmux::{
-    ensure_dir, list_sessions, msg_path, switch_to, tmux, tmux_ok, unique_name,
-};
+use crate::tmux::{ensure_dir, list_sessions, msg_path, switch_to, tmux, tmux_ok, unique_name};
 
 pub const MSG_KEEP: usize = 40;
 
@@ -100,6 +98,21 @@ pub fn cmd_close(name: &str, client: Option<&str>) -> Option<String> {
     switch_to(&prev, client);
     tmux(&["kill-session", "-t", &format!("={name}")]);
     Some(prev)
+}
+
+/// Renames `old` to `new_name`. Empty `new_name` is a no-op (keeps the current name).
+pub fn cmd_rename(old: &str, new_name: &str, _client: Option<&str>) -> Result<(), String> {
+    let new_name = new_name.trim();
+    if new_name.is_empty() || new_name == old {
+        return Ok(());
+    }
+    if tmux_ok(&["has-session", "-t", &format!("={new_name}")]) {
+        return Err(format!("{new_name} already exists"));
+    }
+    if !tmux_ok(&["rename-session", "-t", &format!("={old}"), new_name]) {
+        return Err(format!("failed to rename {old}"));
+    }
+    Ok(())
 }
 
 pub fn cmd_nth(index: usize, client: Option<&str>) {
