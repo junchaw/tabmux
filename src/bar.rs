@@ -1,9 +1,11 @@
-use crate::actions::{fmt_age, load_messages, start_flash};
+use crate::actions::{fmt_age, load_messages, read_status, start_flash, status_fg};
 use crate::groups::{close_session, group_of_session, members_for, CloseOutcome, DEFAULT_GROUP};
 use crate::tmux::{
     sty, switch_to, ACTIVE_BG, ACTIVE_FG, HINT, HINT_BG, HINT_FG, INACTIVE_BG, INACTIVE_FG, MSG_BG,
     MSG_FG, MSG_SEP,
 };
+
+const STATUS_DOT: &str = "\u{25cf}";
 
 fn display_name(name: &str) -> String {
     if let Some(pos) = name.rfind("-claude") {
@@ -47,11 +49,16 @@ fn fit(text: &str, width: usize) -> String {
     format!("{}{}{}", "\u{00a0}".repeat(left), text, "\u{00a0}".repeat(right))
 }
 
-fn label_for(index: usize, name: &str, width: usize) -> String {
+fn label_for(index: usize, name: &str, width: usize, status: Option<&str>) -> String {
     if width <= 3 {
         return fit(&(index + 1).to_string(), width);
     }
-    fit(&format!("{} ({})", display_name(name), index + 1), width)
+    let body = format!("{} ({})", display_name(name), index + 1);
+    if status.is_some() && width > 4 {
+        fit(&format!("{STATUS_DOT} {body}"), width)
+    } else {
+        fit(&body, width)
+    }
 }
 
 fn layout(total: usize, current: &str) -> (Vec<String>, Vec<usize>, Vec<usize>) {
@@ -141,7 +148,20 @@ pub fn cmd_render(width: usize, current: &str) {
         } else {
             (INACTIVE_BG, INACTIVE_FG, false)
         };
-        out.push_str(&sty(bg, fg, &label_for(i, name, *w), bold));
+        let status = read_status(name);
+        let fitted = label_for(i, name, *w, status.as_deref());
+        if let Some(state) = status.as_deref() {
+            if let Some(pos) = fitted.find(STATUS_DOT) {
+                let (before, rest) = fitted.split_at(pos);
+                let after = &rest[STATUS_DOT.len()..];
+                let dot_fg = status_fg(state);
+                out.push_str(&sty(bg, fg, before, bold));
+                out.push_str(&sty(bg, &dot_fg, STATUS_DOT, bold));
+                out.push_str(&sty(bg, fg, after, bold));
+                continue;
+            }
+        }
+        out.push_str(&sty(bg, fg, &fitted, bold));
     }
     let used: usize = widths.iter().sum();
     if used < width {

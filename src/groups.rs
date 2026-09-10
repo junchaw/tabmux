@@ -1,6 +1,6 @@
 use crate::tmux::{
-    ensure_dir, group_path, groups_dir, list_session_rows, sessions_path, switch_to, tmux, tmux_ok,
-    unique_name, Session,
+    ensure_dir, group_path, groups_dir, list_session_rows, sessions_path, status_path, switch_to,
+    tmux, tmux_ok, unique_name, Session,
 };
 
 pub const DEFAULT_GROUP: &str = "default";
@@ -403,6 +403,7 @@ pub fn close_session(session: &str, client: Option<&str>) -> CloseOutcome {
         let target = members[(idx + members.len() - 1) % members.len()].clone();
         switch_to(&target, client);
         tmux(&["kill-session", "-t", &format!("={session}")]);
+        let _ = std::fs::remove_file(status_path(session));
         remove_member(&group, session);
         return CloseOutcome::SwitchedTo(target);
     }
@@ -412,6 +413,7 @@ pub fn close_session(session: &str, client: Option<&str>) -> CloseOutcome {
         tmux(&["detach-client"]);
     }
     tmux(&["kill-session", "-t", &format!("={session}")]);
+    let _ = std::fs::remove_file(status_path(session));
     remove_member(&group, session);
     if load_raw(&group).is_empty() {
         let _ = std::fs::remove_file(group_path(&group));
@@ -424,6 +426,7 @@ pub fn close_group(group: &str) -> usize {
     let members = group_members(group);
     for name in &members {
         tmux(&["kill-session", "-t", &format!("={name}")]);
+        let _ = std::fs::remove_file(status_path(name));
     }
     let _ = std::fs::remove_file(group_path(group));
     members.len()

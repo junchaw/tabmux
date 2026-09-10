@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 
-use crate::actions::{cmd_new, cmd_nth, cmd_rename, start_flash};
+use crate::actions::{apply_status, cmd_new, cmd_nth, cmd_rename, read_status, start_flash, status_choices, status_fg};
 use crate::groups::{
     close_session, group_of_session, members_for, rename_member, set_member_order, stamp_group_ids,
     CloseOutcome, DEFAULT_GROUP,
@@ -277,6 +277,89 @@ fn cmd_reorder(session: &str, client: Option<&str>, group: &str) -> bool {
     }
 }
 
+fn ansi_fg(tmux_color: &str) -> String {
+    let c = tmux_color.trim();
+    if let Some(n) = c.strip_prefix("colour") {
+        return format!("\x1b[38;5;{n}m");
+    }
+    if c.starts_with('#') && c.len() >= 7 {
+        let r = u8::from_str_radix(&c[1..3], 16).unwrap_or(180);
+        let g = u8::from_str_radix(&c[3..5], 16).unwrap_or(180);
+        let b = u8::from_str_radix(&c[5..7], 16).unwrap_or(180);
+        return format!("\x1b[38;2;{r};{g};{b}m");
+    }
+    "\x1b[38;5;252m".into()
+}
+
+fn draw_status_pick(choices: &[String], idx: usize, session: &str) {
+    let (cols, rows) = term_size();
+    let footer = "j/k or arrows  select · enter  set · esc  cancel";
+    let header_rows = 3;
+    let footer_rows = 2;
+    let vis = rows.saturating_sub(header_rows + footer_rows).max(1);
+    let start = if idx >= vis { idx + 1 - vis } else { 0 };
+    let mut out = String::from("\x1b[H\x1b[J");
+    out.push_str(&format!(
+        "\x1b[38;5;216;1mtabmux\x1b[0m  \x1b[38;5;252mstatus  {session}\x1b[0m\n\n"
+    ));
+    for (i, name) in choices.iter().enumerate().skip(start).take(vis) {
+        let mark = if i == idx { "▸" } else { " " };
+        let glyph = if name.as_str() == "unset" { "○" } else { "●" };
+        let body = pad_line(&format!("  {mark}  {glyph}  {name}"), cols);
+        let painted = if name.as_str() == "unset" {
+            format!("\x1b[38;5;245m{body}\x1b[0m")
+        } else {
+            let fg = ansi_fg(&status_fg(name));
+            format!(
+                "\x1b[38;5;252m{}\x1b[0m",
+                body.replacen(glyph, &format!("{fg}{glyph}\x1b[38;5;252m"), 1)
+            )
+        };
+        let line = if i == idx {
+            format!("\x1b[1m{painted}\x1b[0m")
+        } else {
+            painted
+        };
+        out.push_str(&line);
+        out.push('\n');
+    }
+    let r_footer = rows.max(footer_rows);
+    out.push_str(&format!("\x1b[{r_footer};1H\x1b[38;5;245m{footer}\x1b[0m"));
+    let _ = io::stdout().write_all(out.as_bytes());
+    let _ = io::stdout().flush();
+}
+
+fn cmd_status_pick(session: &str, client: Option<&str>) -> Option<String> {
+    let choices = status_choices();
+    if choices.is_empty() {
+        return None;
+    }
+    let current = read_status(session).unwrap_or_else(|| "unset".into());
+    let mut idx = choices.iter().position(|s| s == &current).unwrap_or(0);
+    loop {
+        draw_status_pick(&choices, idx, session);
+        match read_key() {
+            Key::Char('j') | Key::Char('J') | Key::Down => {
+                if idx + 1 < choices.len() {
+                    idx += 1;
+                }
+            }
+            Key::Char('k') | Key::Char('K') | Key::Up => {
+                if idx > 0 {
+                    idx -= 1;
+                }
+            }
+            Key::Enter => {
+                let state = choices[idx].clone();
+                apply_status(&state, session, client);
+                return Some(state);
+            }
+            Key::Esc | Key::Char('q') => return None,
+            _ => {}
+        }
+    }
+}
+
 pub fn cmd_menu(client: Option<&str>) {
     let client = client.filter(|s| !s.is_empty());
     if unsafe { libc::isatty(0) } == 0 {
@@ -292,6 +375,7 @@ pub fn cmd_menu(client: Option<&str>) {
         ("n", "create a new session"),
         ("r", "rename the current session"),
         ("m", "reorder sessions"),
+        ("s", "set status dot"),
         ("d", "detach (tabmux keeps running)"),
     ];
     let mut switches: Vec<(String, String)> = Vec::new();
@@ -381,6 +465,25 @@ pub fn cmd_menu(client: Option<&str>) {
                 start_flash("nothing to reorder", client);
             } else if cmd_reorder(&sess, client, &group) {
                 start_flash("reordered", client);
+            }
+        }
+        's' => {
+            let sess = if current.is_empty() {
+                client_session(client)
+            } else {
+                current
+            };
+            if sess.is_empty() {
+                start_flash("nothing to set", client);
+            } else if let Some(state) = cmd_status_pick(&sess, client) {
+                start_flash(
+                    &if state == "unset" {
+                        format!("cleared status on {sess}")
+                    } else {
+                        format!("{sess} {state}")
+                    },
+                    client,
+                );
             }
         }
         '1'..='9' => {

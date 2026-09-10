@@ -7,7 +7,7 @@ mod tmux;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
-use actions::{cmd_new, cmd_nth, load_snapshot, save_snapshot};
+use actions::{cmd_new, cmd_nth, cmd_status, load_snapshot, save_snapshot};
 use bar::{cmd_click, cmd_click_close, cmd_render, cmd_render_msgs};
 use groups::{close_group, ensure_group, group_of_session, last_used_member, list_groups, members_for, DEFAULT_GROUP};
 use menu::cmd_menu;
@@ -151,6 +151,8 @@ Group sessions (each group is its own independent set of tabs):
   tabmux attach [xx]  attach to group xx (no name = default)
   tabmux ls           list groups
   tabmux close <xx>   kill group xx and all its sessions
+  tabmux status <name> [session]
+                      set this tab's status dot (busy/attention/idle/unset or any name)
   tabmux save         write session names and cwd so a restart can recreate tabs
 
 Inside the app: Ctrl-b for the command menu.
@@ -219,6 +221,13 @@ fn main() {
         }
         "menu" => cmd_menu(opt(rest.first())),
         "ls" => cmd_ls(),
+        "status" => {
+            let Some(state) = rest.first() else {
+                eprintln!("tabmux status: missing state (busy, attention, idle, or any name)");
+                std::process::exit(2);
+            };
+            cmd_status(state, opt(rest.get(1)), None);
+        }
         "save" => save_snapshot(),
         _ => {
             usage();
