@@ -7,9 +7,9 @@ mod tmux;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
-use actions::{cmd_move, cmd_new, cmd_nth, cmd_rename, load_snapshot, save_snapshot};
+use actions::{cmd_new, cmd_nth, load_snapshot, save_snapshot};
 use bar::{cmd_click, cmd_click_close, cmd_render, cmd_render_msgs};
-use groups::{close_group, ensure_group, group_of_session, last_used_member, list_groups, members_for, rename_member, DEFAULT_GROUP};
+use groups::{close_group, ensure_group, group_of_session, last_used_member, list_groups, members_for, DEFAULT_GROUP};
 use menu::cmd_menu;
 use tmux::{conf_dir, conf_path, launcher, tmux, tmux_ok, tmux_stdout, INACTIVE_BG, INACTIVE_FG, MSG_BG, SOCKET};
 
@@ -147,16 +147,12 @@ fn usage() {
 tabmux — isolated tmux with a bottom session tab bar
 
 Group sessions (each group is its own independent set of tabs):
-  tabmux              attach to the \"default\" group (creates server/group if needed)
-  tabmux attach [xx]  attach to group xx (defaults to \"default\")
+  tabmux              attach to the default group
+  tabmux attach [xx]  attach to group xx (no name = default)
   tabmux ls           list groups
-  tabmux close [xx]   kill an entire group and all its sessions (defaults to \"default\")
+  tabmux close <xx>   kill group xx and all its sessions
 
-Sub-sessions (tabs within the current group):
-  tabmux new [name]   create and switch
-  tabmux rename [old] <new>  rename a session (old defaults to current)
-  tabmux move up|down [session]
-                             move a session one slot in the current group
+  tabmux new [name]   create a tab in the current group
   tabmux save         snapshot session names/paths for restore after a restart
 
 Inside the app:
@@ -219,61 +215,12 @@ fn main() {
                 None,
             );
         }
-        "rename" => {
-            let (old, new_name) = match rest {
-                [new_name] => {
-                    let old = tmux_stdout(&["display-message", "-p", "#{session_name}"])
-                        .trim()
-                        .to_string();
-                    (old, new_name.as_str())
-                }
-                [old, new_name, ..] => (old.clone(), new_name.as_str()),
-                [] => {
-                    eprintln!("tabmux rename: missing new name");
-                    std::process::exit(2);
-                }
-            };
-            if old.is_empty() {
-                eprintln!("tabmux rename: not inside a tabmux session, pass the old name");
-                std::process::exit(2);
-            }
-            let group = group_of_session(&old);
-            if let Err(e) = cmd_rename(&old, new_name, None) {
-                eprintln!("{e}");
-                std::process::exit(1);
-            }
-            if let Some(g) = group {
-                rename_member(&g, &old, new_name.trim());
-            }
-        }
         "close" => {
-            let group = opt(rest.first()).unwrap_or(DEFAULT_GROUP);
-            cmd_close_group(group);
-        }
-        "move" => {
-            let dir = rest.first().map(|s| s.as_str()).unwrap_or("");
-            let delta = match dir {
-                "up" | "left" => -1,
-                "down" | "right" => 1,
-                _ => {
-                    eprintln!("tabmux move: expected up or down");
-                    std::process::exit(2);
-                }
-            };
-            let session = match rest.get(1) {
-                Some(name) if !name.is_empty() => name.clone(),
-                _ => tmux_stdout(&["display-message", "-p", "#{session_name}"])
-                    .trim()
-                    .to_string(),
-            };
-            if session.is_empty() {
-                eprintln!("tabmux move: not inside a tabmux session, pass a name");
+            let Some(group) = opt(rest.first()) else {
+                eprintln!("tabmux close: missing group name");
                 std::process::exit(2);
-            }
-            if let Err(e) = cmd_move(&session, delta) {
-                eprintln!("{e}");
-                std::process::exit(1);
-            }
+            };
+            cmd_close_group(group);
         }
         "nth" => {
             let i = rest.first().and_then(|s| s.parse().ok()).unwrap_or(0);
