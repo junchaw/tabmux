@@ -1,7 +1,8 @@
-use crate::actions::{cmd_close, fmt_age, load_messages, read_status, start_flash};
+use crate::actions::{fmt_age, load_messages, read_status, start_flash};
+use crate::groups::{close_session, members_for};
 use crate::tmux::{
-    list_sessions, sty, switch_to, ACTIVE_BG, ACTIVE_FG, HINT, HINT_BG, HINT_FG, INACTIVE_BG,
-    INACTIVE_FG, MSG_BG, MSG_FG, MSG_SEP, STATUS_ATTENTION_FG, STATUS_BUSY_FG,
+    sty, switch_to, ACTIVE_BG, ACTIVE_FG, HINT, HINT_BG, HINT_FG, INACTIVE_BG, INACTIVE_FG,
+    MSG_BG, MSG_FG, MSG_SEP, STATUS_ATTENTION_FG, STATUS_BUSY_FG,
 };
 
 const STATUS_DOT: &str = "\u{25cf}";
@@ -55,8 +56,8 @@ fn label_for(index: usize, name: &str, width: usize) -> String {
     fit(&format!("{} ({})", display_name(name), index + 1), width)
 }
 
-fn layout(total: usize) -> (Vec<String>, Vec<usize>, Vec<usize>) {
-    let names = list_sessions();
+fn layout(total: usize, current: &str) -> (Vec<String>, Vec<usize>, Vec<usize>) {
+    let names = members_for(current);
     let n = names.len();
     if n == 0 || total == 0 {
         return (Vec::new(), Vec::new(), Vec::new());
@@ -78,8 +79,8 @@ fn layout(total: usize) -> (Vec<String>, Vec<usize>, Vec<usize>) {
     (names, starts, widths)
 }
 
-fn hit(x: usize, total: usize) -> Option<String> {
-    let (names, starts, widths) = layout(total);
+fn hit(x: usize, total: usize, current: &str) -> Option<String> {
+    let (names, starts, widths) = layout(total, current);
     for i in 0..names.len() {
         let a = starts[i];
         let b = a + widths[i];
@@ -128,7 +129,7 @@ pub fn cmd_render_msgs(width: usize) {
 pub fn cmd_render(width: usize, current: &str) {
     let width = width.saturating_add(1).max(1);
     let current = current.trim().trim_matches(|c| c == '\'' || c == '"');
-    let (names, _, widths) = layout(width);
+    let (names, _, widths) = layout(width, current);
     if names.is_empty() {
         print!(" ");
         return;
@@ -165,27 +166,26 @@ pub fn cmd_render(width: usize, current: &str) {
     print!("{out}");
 }
 
-pub fn cmd_click(x: usize, width: usize, client: Option<&str>, line: i32) {
+pub fn cmd_click(x: usize, width: usize, client: Option<&str>, line: i32, current: &str) {
     if line >= 1 {
         crate::menu::popup_menu(client);
         return;
     }
-    if let Some(target) = hit(x, width) {
+    if let Some(target) = hit(x, width, current) {
         switch_to(&target, client);
         start_flash(&format!("switched to {target}"), client);
     }
 }
 
-pub fn cmd_click_close(x: usize, width: usize, client: Option<&str>, line: i32) {
+pub fn cmd_click_close(x: usize, width: usize, client: Option<&str>, line: i32, current: &str) {
     if line >= 1 {
         return;
     }
-    let Some(target) = hit(x, width) else {
+    let Some(target) = hit(x, width, current) else {
         return;
     };
-    if cmd_close(&target, client).is_some() {
-        start_flash(&format!("closed {target}"), client);
-    } else {
-        start_flash("won't close last session", client);
+    match close_session(&target, client) {
+        Some(next) => start_flash(&format!("closed {target}, switched to {next}"), client),
+        None => start_flash(&format!("couldn't close {target}"), client),
     }
 }

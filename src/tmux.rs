@@ -39,6 +39,14 @@ pub fn sessions_path() -> PathBuf {
     conf_dir().join("sessions")
 }
 
+pub fn groups_dir() -> PathBuf {
+    conf_dir().join("groups")
+}
+
+pub fn group_path(group: &str) -> PathBuf {
+    groups_dir().join(group)
+}
+
 /// Working directory of a session's first pane, if it exists.
 pub fn session_path(session: &str) -> Option<String> {
     let out = tmux_stdout(&[
@@ -94,23 +102,45 @@ pub fn tmux_stdout(args: &[&str]) -> String {
     String::from_utf8_lossy(&tmux(args).stdout).to_string()
 }
 
-pub fn list_sessions() -> Vec<String> {
-    let out = tmux_stdout(&["list-sessions", "-F", "#{session_created}\t#{session_name}"]);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Session {
+    pub id: String,
+    pub name: String,
+    pub created: i64,
+}
+
+/// Live sessions, oldest first. `id` is tmux's `#{session_id}` (`$0`, `$1`, …)
+/// and survives `rename-session`.
+pub fn list_session_rows() -> Vec<Session> {
     if !tmux(&["list-sessions"]).status.success() {
         return Vec::new();
     }
-    let mut rows: Vec<(i64, String)> = Vec::new();
+    let out = tmux_stdout(&[
+        "list-sessions",
+        "-F",
+        "#{session_id}\t#{session_created}\t#{session_name}",
+    ]);
+    let mut rows = Vec::new();
     for line in out.lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let (ts, name) = line.split_once('\t').unwrap_or(("0", line));
-        let created = ts.parse().unwrap_or(0);
-        rows.push((created, name.to_string()));
+        let mut parts = line.splitn(3, '\t');
+        let id = parts.next().unwrap_or("").to_string();
+        let created = parts.next().unwrap_or("0").parse().unwrap_or(0);
+        let name = parts.next().unwrap_or("").to_string();
+        if id.is_empty() || name.is_empty() {
+            continue;
+        }
+        rows.push(Session { id, name, created });
     }
-    rows.sort_by_key(|(ts, _)| *ts);
-    rows.into_iter().map(|(_, n)| n).collect()
+    rows.sort_by_key(|s| s.created);
+    rows
+}
+
+pub fn list_sessions() -> Vec<String> {
+    list_session_rows().into_iter().map(|s| s.name).collect()
 }
 
 pub fn switch_to(session: &str, client: Option<&str>) {

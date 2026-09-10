@@ -5,6 +5,8 @@ use crate::tmux::{
     status_path, switch_to, tmux, tmux_ok, unique_name,
 };
 
+
+
 pub const MSG_KEEP: usize = 40;
 pub const STATUS_STATES: &[&str] = &["busy", "attention", "idle"];
 
@@ -116,27 +118,6 @@ pub fn cmd_new(name: &str, client: Option<&str>) -> (String, bool) {
     (name, created)
 }
 
-pub fn cmd_close(name: &str, client: Option<&str>) -> Option<String> {
-    let names = list_sessions();
-    let name = name.trim();
-    if name.is_empty() || !names.iter().any(|s| s == name) {
-        return None;
-    }
-    if names.len() <= 1 {
-        return None;
-    }
-    let idx = names.iter().position(|s| s == name).unwrap();
-    let prev = names[(idx + names.len() - 1) % names.len()].clone();
-    if prev == name {
-        return None;
-    }
-    switch_to(&prev, client);
-    tmux(&["kill-session", "-t", &format!("={name}")]);
-    let _ = std::fs::remove_file(status_path(name));
-    save_snapshot();
-    Some(prev)
-}
-
 /// Reads the last-reported status for a session ("busy" / "attention"),
 /// or None when idle / never reported.
 pub fn read_status(session: &str) -> Option<String> {
@@ -202,8 +183,7 @@ pub fn cmd_rename(old: &str, new_name: &str, _client: Option<&str>) -> Result<()
     Ok(())
 }
 
-pub fn cmd_nth(index: usize, client: Option<&str>) {
-    let names = list_sessions();
+pub fn cmd_nth(names: &[String], index: usize, client: Option<&str>) {
     if index >= 1 && index <= names.len() {
         switch_to(&names[index - 1], client);
     }
