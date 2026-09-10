@@ -2,7 +2,8 @@ use std::io::{self, Write};
 
 use crate::actions::{cmd_new, cmd_nth, cmd_rename, start_flash};
 use crate::groups::{
-    close_session, group_of_session, members_for, rename_member, stamp_group_ids, DEFAULT_GROUP,
+    close_session, group_of_session, members_for, rename_member, set_member_order, stamp_group_ids,
+    DEFAULT_GROUP,
 };
 use crate::tmux::{launcher, tmux, unique_name};
 
@@ -49,7 +50,16 @@ pub fn popup_menu(client: Option<&str>) {
     }
 }
 
-fn read_raw() -> Option<u8> {
+enum Key {
+    Char(char),
+    Up,
+    Down,
+    Enter,
+    Esc,
+    Other,
+}
+
+fn read_byte(timeout_tenths: Option<u8>) -> Option<u8> {
     unsafe {
         let fd = 0;
         let mut old: libc::termios = std::mem::zeroed();
@@ -58,8 +68,16 @@ fn read_raw() -> Option<u8> {
         }
         let mut raw = old;
         raw.c_lflag &= !(libc::ICANON | libc::ECHO);
-        raw.c_cc[libc::VMIN] = 1;
-        raw.c_cc[libc::VTIME] = 0;
+        match timeout_tenths {
+            Some(t) => {
+                raw.c_cc[libc::VMIN] = 0;
+                raw.c_cc[libc::VTIME] = t;
+            }
+            None => {
+                raw.c_cc[libc::VMIN] = 1;
+                raw.c_cc[libc::VTIME] = 0;
+            }
+        }
         if libc::tcsetattr(fd, libc::TCSANOW, &raw) != 0 {
             return None;
         }
@@ -71,6 +89,30 @@ fn read_raw() -> Option<u8> {
         } else {
             None
         }
+    }
+}
+
+fn read_raw() -> Option<u8> {
+    read_byte(None)
+}
+
+fn read_key() -> Key {
+    let Some(b) = read_byte(None) else {
+        return Key::Other;
+    };
+    match b {
+        b'\r' | b'\n' => Key::Enter,
+        0x03 | 0x04 => Key::Esc,
+        0x1b => match read_byte(Some(1)) {
+            Some(b'[') => match read_byte(Some(1)) {
+                Some(b'A') | Some(b'D') => Key::Up,
+                Some(b'B') | Some(b'C') => Key::Down,
+                _ => Key::Esc,
+            },
+            _ => Key::Esc,
+        },
+        c if c.is_ascii_graphic() || c == b' ' => Key::Char(c as char),
+        _ => Key::Other,
     }
 }
 
@@ -141,6 +183,92 @@ fn client_session(client: Option<&str>) -> String {
     out.trim().to_string()
 }
 
+fn refresh_bar(client: Option<&str>) {
+    if let Some(c) = client.filter(|s| !s.is_empty()) {
+        tmux(&["refresh-client", "-S", "-t", c]);
+    } else {
+        tmux(&["refresh-client", "-S"]);
+    }
+}
+
+fn draw_reorder(names: &[String], moving: usize) {
+    let (cols, rows) = term_size();
+    let footer = "j/k or arrows  move · enter  confirm · esc  cancel";
+    let header_rows = 3;
+    let footer_rows = 2;
+    let vis = rows.saturating_sub(header_rows + footer_rows).max(1);
+    let start = if moving >= vis { moving + 1 - vis } else { 0 };
+    let mut out = String::from("\x1b[H\x1b[J");
+    out.push_str("tabmux  reorder\n\n");
+    for (i, name) in names.iter().enumerate().skip(start).take(vis) {
+        let mark = if i == moving { "▸" } else { " " };
+        let num = i + 1;
+        let mut line = if i == moving {
+            format!("  \x1b[1m{mark} {num:>2}  {name}\x1b[0m")
+        } else {
+            format!("  {mark} {num:>2}  {name}")
+        };
+        if line.chars().count() > cols {
+            line = line.chars().take(cols).collect();
+        }
+        out.push_str(&line);
+        out.push('\n');
+    }
+    let r_footer = rows.max(footer_rows);
+    out.push_str(&format!("\x1b[{r_footer};1H{footer}"));
+    let _ = io::stdout().write_all(out.as_bytes());
+    let _ = io::stdout().flush();
+}
+
+/// Interactive reorder of `session`. Returns true if the new order was kept.
+fn cmd_reorder(session: &str, client: Option<&str>, group: &str) -> bool {
+    let snapshot = members_for(session);
+    if snapshot.len() < 2 {
+        return false;
+    }
+    let Some(mut idx) = snapshot.iter().position(|s| s == session) else {
+        return false;
+    };
+    let mut names = snapshot.clone();
+    let mut dirty = false;
+    loop {
+        draw_reorder(&names, idx);
+        match read_key() {
+            Key::Char('j') | Key::Char('J') | Key::Down => {
+                if idx + 1 < names.len() {
+                    names.swap(idx, idx + 1);
+                    idx += 1;
+                    set_member_order(group, &names);
+                    refresh_bar(client);
+                    dirty = true;
+                }
+            }
+            Key::Char('k') | Key::Char('K') | Key::Up => {
+                if idx > 0 {
+                    names.swap(idx, idx - 1);
+                    idx -= 1;
+                    set_member_order(group, &names);
+                    refresh_bar(client);
+                    dirty = true;
+                }
+            }
+            Key::Enter => {
+                set_member_order(group, &names);
+                refresh_bar(client);
+                return true;
+            }
+            Key::Esc | Key::Char('q') => {
+                if dirty {
+                    set_member_order(group, &snapshot);
+                    refresh_bar(client);
+                }
+                return false;
+            }
+            _ => {}
+        }
+    }
+}
+
 pub fn cmd_menu(client: Option<&str>) {
     let client = client.filter(|s| !s.is_empty());
     if unsafe { libc::isatty(0) } == 0 {
@@ -155,6 +283,7 @@ pub fn cmd_menu(client: Option<&str>) {
         ("q", "close this menu"),
         ("n", "create a new session"),
         ("r", "rename the current session"),
+        ("m", "reorder sessions"),
         ("d", "detach (tabmux keeps running)"),
     ];
     let mut switches: Vec<(String, String)> = Vec::new();
@@ -229,6 +358,18 @@ pub fn cmd_menu(client: Option<&str>) {
                     }
                     Err(e) => start_flash(&e, client),
                 }
+            }
+        }
+        'm' => {
+            let sess = if current.is_empty() {
+                client_session(client)
+            } else {
+                current
+            };
+            if sess.is_empty() || names.len() < 2 {
+                start_flash("nothing to reorder", client);
+            } else if cmd_reorder(&sess, client, &group) {
+                start_flash("reordered", client);
             }
         }
         '1'..='9' => {

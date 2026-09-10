@@ -196,6 +196,47 @@ pub fn add_member(group: &str, session: &str) {
     write_members(group, &members);
 }
 
+/// Rewrite `group`'s member list to `names` order, keeping stored ids.
+pub fn set_member_order(group: &str, names: &[String]) {
+    let live = list_session_rows();
+    let current = load_raw(group);
+    let mut out = Vec::new();
+    for name in names {
+        if let Some(m) = current.iter().find(|m| &m.name == name) {
+            out.push(m.clone());
+            continue;
+        }
+        let sid = live.iter().find(|s| &s.name == name).map(|s| s.id.clone());
+        out.push(Member {
+            id: sid,
+            name: name.clone(),
+        });
+    }
+    for m in current {
+        if !out.iter().any(|o| o.name == m.name) {
+            out.push(m);
+        }
+    }
+    write_members(group, &out);
+}
+
+/// Moves `session` by `delta` slots in `group` (-1 = up, +1 = down).
+pub fn move_member(group: &str, session: &str, delta: i32) -> Result<Vec<String>, String> {
+    let mut names: Vec<String> = load_raw(group).into_iter().map(|m| m.name).collect();
+    if names.is_empty() {
+        names = group_members(group);
+    }
+    let Some(i) = names.iter().position(|s| s == session) else {
+        return Err(format!("{session} not found"));
+    };
+    let j = i as i32 + delta;
+    if j >= 0 && j < names.len() as i32 {
+        names.swap(i, j as usize);
+        set_member_order(group, &names);
+    }
+    Ok(names)
+}
+
 pub fn remove_member(group: &str, session: &str) {
     let live = list_session_rows();
     let sid = live.iter().find(|s| s.name == session).map(|s| s.id.clone());

@@ -36,6 +36,8 @@ tabmux close [xx]   # kill a group and all its sessions
 tabmux new [name]   # create a tab in the current group
 tabmux rename [old] <new>
                     # rename a session; old defaults to the current session
+tabmux move up|down [session]
+                    # move a session one slot in the current group
 tabmux save         # snapshot session names/paths (also done automatically)
 ```
 
@@ -59,6 +61,8 @@ layout only, not what was running in the pane.
 | left-click a tab | switch session |
 | right-click a tab | close session |
 | `n` | new session |
+| `r` | rename current session |
+| `m` | reorder sessions (`j`/`k` or arrows, Enter to save) |
 | `x` | close current session |
 | `1`–`9` | jump to nth tab |
 | `p` | previous session |

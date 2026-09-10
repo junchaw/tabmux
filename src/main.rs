@@ -7,7 +7,7 @@ mod tmux;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
-use actions::{cmd_new, cmd_nth, cmd_rename, load_snapshot, save_snapshot};
+use actions::{cmd_move, cmd_new, cmd_nth, cmd_rename, load_snapshot, save_snapshot};
 use bar::{cmd_click, cmd_click_close, cmd_render, cmd_render_msgs};
 use groups::{close_group, ensure_group, group_of_session, last_used_member, list_groups, members_for, rename_member, DEFAULT_GROUP};
 use menu::cmd_menu;
@@ -155,6 +155,8 @@ Group sessions (each group is its own independent set of tabs):
 Sub-sessions (tabs within the current group):
   tabmux new [name]   create and switch
   tabmux rename [old] <new>  rename a session (old defaults to current)
+  tabmux move up|down [session]
+                             move a session one slot in the current group
   tabmux save         snapshot session names/paths for restore after a restart
 
 Inside the app:
@@ -162,6 +164,8 @@ Inside the app:
   left-click tab         switch
   right-click tab        close
   n                      new session
+  r                      rename current session
+  m                      reorder sessions
   x                      close current
   1-9                    jump to nth tab
   p                      previous session
@@ -245,6 +249,31 @@ fn main() {
         "close" => {
             let group = opt(rest.first()).unwrap_or(DEFAULT_GROUP);
             cmd_close_group(group);
+        }
+        "move" => {
+            let dir = rest.first().map(|s| s.as_str()).unwrap_or("");
+            let delta = match dir {
+                "up" | "left" => -1,
+                "down" | "right" => 1,
+                _ => {
+                    eprintln!("tabmux move: expected up or down");
+                    std::process::exit(2);
+                }
+            };
+            let session = match rest.get(1) {
+                Some(name) if !name.is_empty() => name.clone(),
+                _ => tmux_stdout(&["display-message", "-p", "#{session_name}"])
+                    .trim()
+                    .to_string(),
+            };
+            if session.is_empty() {
+                eprintln!("tabmux move: not inside a tabmux session, pass a name");
+                std::process::exit(2);
+            }
+            if let Err(e) = cmd_move(&session, delta) {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
         }
         "nth" => {
             let i = rest.first().and_then(|s| s.parse().ok()).unwrap_or(0);
