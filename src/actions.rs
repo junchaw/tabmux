@@ -1,6 +1,9 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::tmux::{ensure_dir, list_sessions, msg_path, switch_to, tmux, tmux_ok, unique_name};
+use crate::tmux::{
+    ensure_dir, list_sessions, msg_path, session_path, sessions_path, switch_to, tmux, tmux_ok,
+    unique_name,
+};
 
 pub const MSG_KEEP: usize = 40;
 
@@ -11,8 +14,30 @@ pub fn now_secs() -> f64 {
         .unwrap_or(0.0)
 }
 
-pub fn load_messages() -> Vec<(f64, String)> {
-    let Ok(raw) = std::fs::read_to_string(msg_path()) else {
+fn group_for(session: Option<&str>, client: Option<&str>) -> String {
+    let sess = session
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            let out = if let Some(c) = client.filter(|s| !s.is_empty()) {
+                crate::tmux::tmux_stdout(&["display-message", "-c", c, "-p", "#{session_name}"])
+            } else {
+                crate::tmux::tmux_stdout(&["display-message", "-p", "#{session_name}"])
+            };
+            let s = out.trim();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        })
+        .unwrap_or_default();
+    crate::groups::group_of_session(&sess)
+        .unwrap_or_else(|| crate::groups::DEFAULT_GROUP.to_string())
+}
+
+pub fn load_messages(group: &str) -> Vec<(f64, String)> {
+    let Ok(raw) = std::fs::read_to_string(msg_path(group)) else {
         return Vec::new();
     };
     let mut items = Vec::new();
@@ -47,9 +72,10 @@ pub fn start_flash(msg: &str, client: Option<&str>) {
     if msg.is_empty() {
         return;
     }
-    let path = msg_path();
+    let group = group_for(None, client);
+    let path = msg_path(&group);
     ensure_dir(&path);
-    let mut items = load_messages();
+    let mut items = load_messages(&group);
     items.push((now_secs(), msg.to_string()));
     let keep = if items.len() > MSG_KEEP {
         &items[items.len() - MSG_KEEP..]
@@ -68,42 +94,63 @@ pub fn start_flash(msg: &str, client: Option<&str>) {
     }
 }
 
-pub fn cmd_new(name: &str, client: Option<&str>) -> (String, bool) {
+/// Snapshots each session's name and working directory to disk, so a fresh
+/// server (e.g. after a reboot) can recreate them at the same paths.
+pub fn save_snapshot() {
+    let names = list_sessions();
+    let body: String = names
+        .iter()
+        .filter_map(|name| session_path(name).map(|path| format!("{name}\t{path}\n")))
+        .collect();
+    let path = sessions_path();
+    ensure_dir(&path);
+    let _ = std::fs::write(&path, body);
+}
+
+/// Loads the last-saved (name, path) pairs, in original creation order.
+pub fn load_snapshot() -> Vec<(String, String)> {
+    let Ok(raw) = std::fs::read_to_string(sessions_path()) else {
+        return Vec::new();
+    };
+    raw.lines()
+        .filter_map(|line| {
+            let (name, path) = line.split_once('\t')?;
+            if name.is_empty() || path.is_empty() {
+                None
+            } else {
+                Some((name.to_string(), path.to_string()))
+            }
+        })
+        .collect()
+}
+
+pub fn cmd_new(name: &str, client: Option<&str>, group: Option<&str>) -> (String, bool) {
+    let group = group
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| group_for(None, client));
     let mut name = name.trim().to_string();
     if name.is_empty() {
-        name = unique_name();
+        name = unique_name(Some(&group));
     }
     let created = !tmux_ok(&["has-session", "-t", &format!("={name}")]);
     if created {
         tmux(&["new-session", "-d", "-s", &name]);
+        save_snapshot();
+        crate::groups::add_member(&group, &name);
     }
     switch_to(&name, client);
     (name, created)
 }
 
-pub fn cmd_close(name: &str, client: Option<&str>) -> Option<String> {
-    let names = list_sessions();
-    let name = name.trim();
-    if name.is_empty() || !names.iter().any(|s| s == name) {
-        return None;
-    }
-    if names.len() <= 1 {
-        return None;
-    }
-    let idx = names.iter().position(|s| s == name).unwrap();
-    let prev = names[(idx + names.len() - 1) % names.len()].clone();
-    if prev == name {
-        return None;
-    }
-    switch_to(&prev, client);
-    tmux(&["kill-session", "-t", &format!("={name}")]);
-    Some(prev)
-}
-
-/// Renames `old` to `new_name`. Empty `new_name` is a no-op (keeps the current name).
+/// Renames `old` to `new_name`. Returns an error message on failure, None on success.
 pub fn cmd_rename(old: &str, new_name: &str, _client: Option<&str>) -> Result<(), String> {
     let new_name = new_name.trim();
-    if new_name.is_empty() || new_name == old {
+    if new_name.is_empty() {
+        return Err("name can't be empty".into());
+    }
+    if new_name == old {
         return Ok(());
     }
     if tmux_ok(&["has-session", "-t", &format!("={new_name}")]) {
@@ -112,11 +159,11 @@ pub fn cmd_rename(old: &str, new_name: &str, _client: Option<&str>) -> Result<()
     if !tmux_ok(&["rename-session", "-t", &format!("={old}"), new_name]) {
         return Err(format!("failed to rename {old}"));
     }
+    save_snapshot();
     Ok(())
 }
 
-pub fn cmd_nth(index: usize, client: Option<&str>) {
-    let names = list_sessions();
+pub fn cmd_nth(names: &[String], index: usize, client: Option<&str>) {
     if index >= 1 && index <= names.len() {
         switch_to(&names[index - 1], client);
     }
