@@ -29,15 +29,11 @@ Requires Rust 1.70+ and tmux 3.2+.
 ## Usage
 
 ```
-tabmux              # attach to the default group (creates server/group if needed)
-tabmux attach [xx]  # attach to group xx
+tabmux              # attach to the default group
+tabmux attach [xx]  # attach to group xx (no name = default)
 tabmux ls           # list groups
-tabmux close [xx]   # kill a group and all its sessions
+tabmux close <xx>   # kill group xx and all its sessions
 tabmux new [name]   # create a tab in the current group
-tabmux rename [old] <new>
-                    # rename a session; old defaults to the current session
-tabmux move up|down [session]
-                    # move a session one slot in the current group
 tabmux save         # snapshot session names/paths (also done automatically)
 ```
 
