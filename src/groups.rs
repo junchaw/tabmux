@@ -1,6 +1,6 @@
 use crate::tmux::{
-    ensure_dir, group_path, groups_dir, list_session_rows, status_path, switch_to, tmux, tmux_ok,
-    unique_name, Session,
+    ensure_dir, group_path, groups_dir, list_session_rows, sessions_path, status_path, switch_to,
+    tmux, tmux_ok, unique_name, Session,
 };
 
 pub const DEFAULT_GROUP: &str = "default";
@@ -56,20 +56,26 @@ fn write_members(group: &str, members: &[Member]) {
     let _ = std::fs::write(&path, body);
 }
 
-/// Prefer session id (survives rename); fall back to name for legacy rows.
-/// Returns the kept members and whether the on-disk list should be rewritten.
-fn resolve_members(members: Vec<Member>, live: &[Session]) -> (Vec<Member>, bool) {
+/// Refresh names/ids from live tmux. Never drops a saved row — missing
+/// sessions are restored on attach, not deleted from the group file.
+fn refresh_members(members: Vec<Member>, live: &[Session]) -> (Vec<Member>, bool) {
     let mut kept = Vec::new();
     let mut changed = false;
     for mut m in members {
         if let Some(id) = &m.id {
             if let Some(s) = live.iter().find(|s| &s.id == id) {
-                if m.name != s.name {
-                    m.name = s.name.clone();
-                    changed = true;
+                // After a server restart ids are reused. If this id now points
+                // at a different live name that still exists, fall through and
+                // match by name instead of hijacking the row.
+                let id_reused = s.name != m.name && live.iter().any(|x| x.name == m.name);
+                if !id_reused {
+                    if m.name != s.name {
+                        m.name = s.name.clone();
+                        changed = true;
+                    }
+                    kept.push(m);
+                    continue;
                 }
-                kept.push(m);
-                continue;
             }
         }
         if let Some(s) = live.iter().find(|s| s.name == m.name) {
@@ -80,9 +86,44 @@ fn resolve_members(members: Vec<Member>, live: &[Session]) -> (Vec<Member>, bool
             kept.push(m);
             continue;
         }
-        changed = true;
+        kept.push(m);
     }
     (kept, changed)
+}
+
+fn snapshot_cwd(name: &str) -> Option<String> {
+    let raw = std::fs::read_to_string(sessions_path()).ok()?;
+    for line in raw.lines() {
+        let (n, path) = line.split_once('\t')?;
+        if n == name && !path.is_empty() {
+            return Some(path.to_string());
+        }
+    }
+    None
+}
+
+fn resurrect(name: &str) {
+    if tmux_ok(&["has-session", "-t", &format!("={name}")]) {
+        return;
+    }
+    let path = snapshot_cwd(name).unwrap_or_else(|| {
+        std::env::var("HOME").unwrap_or_else(|_| "/".into())
+    });
+    tmux(&["new-session", "-d", "-s", name, "-c", &path]);
+}
+
+/// Recreate any saved group member that isn't live in tmux.
+pub fn restore_missing_members(group: &str) {
+    if !server_alive() {
+        return;
+    }
+    let live = list_session_rows();
+    for m in load_raw(group) {
+        if live.iter().any(|s| s.name == m.name) {
+            continue;
+        }
+        resurrect(&m.name);
+    }
 }
 
 /// Stamp ids onto name-only rows from the current live list. Does not prune.
@@ -112,20 +153,30 @@ pub fn stamp_group_ids(group: &str) {
     }
 }
 
-/// Sessions registered to `group`, in original order. Prunes any that no
-/// longer exist in tmux (rewriting the group file) as long as the server is
-/// actually reachable, so a down server never wipes a group's membership.
+/// Sessions registered to `group`, in original order. Refreshes ids/names
+/// from live tmux but does not drop saved members.
 pub fn group_members(group: &str) -> Vec<String> {
     let members = load_raw(group);
     if !server_alive() {
         return members.into_iter().map(|m| m.name).collect();
     }
     let live = list_session_rows();
-    let (kept, changed) = resolve_members(members, &live);
+    if live.is_empty() {
+        return members.into_iter().map(|m| m.name).collect();
+    }
+    let (kept, changed) = refresh_members(members, &live);
     if changed {
         write_members(group, &kept);
     }
-    kept.into_iter().map(|m| m.name).collect()
+    kept.into_iter()
+        .filter(|m| live.iter().any(|s| s.name == m.name || m.id.as_ref() == Some(&s.id)))
+        .map(|m| {
+            live.iter()
+                .find(|s| s.name == m.name || m.id.as_ref() == Some(&s.id))
+                .map(|s| s.name.clone())
+                .unwrap_or(m.name)
+        })
+        .collect()
 }
 
 pub fn add_member(group: &str, session: &str) {
@@ -180,22 +231,29 @@ pub fn rename_member(group: &str, old: &str, new_name: &str) {
     }
 }
 
-/// Which group a session belongs to, if any.
+/// Which group a session belongs to, if any. Prefers a named group over
+/// `default` so a session that was also adopted into default stays put.
 pub fn group_of_session(session: &str) -> Option<String> {
     let sid = list_session_rows()
         .into_iter()
         .find(|s| s.name == session)
         .map(|s| s.id);
     let entries = std::fs::read_dir(groups_dir()).ok()?;
+    let mut fallback = None;
     for entry in entries.flatten() {
         let group = entry.file_name().to_string_lossy().to_string();
-        if load_raw(&group).iter().any(|m| {
+        let belongs = load_raw(&group).iter().any(|m| {
             m.name == session || (sid.is_some() && m.id.is_some() && m.id == sid)
-        }) {
+        });
+        if !belongs {
+            continue;
+        }
+        if group != DEFAULT_GROUP {
             return Some(group);
         }
+        fallback = Some(group);
     }
-    None
+    fallback
 }
 
 /// All known groups, sorted by name.
@@ -238,9 +296,34 @@ pub fn members_for(current: &str) -> Vec<String> {
     }
 }
 
-/// Ensures `group` has at least one live session, creating one if needed.
-/// Returns the group's members (pruned, guaranteed non-empty).
+/// Put any live session that isn't in a group yet into `default`, so a
+/// re-attach still shows every tab instead of leaving orphans unattached.
+pub fn adopt_orphans_into_default() {
+    for s in list_session_rows() {
+        if group_of_session(&s.name).is_none() {
+            add_member(DEFAULT_GROUP, &s.name);
+        }
+    }
+}
+
+/// Live session in `members` that was attached most recently.
+pub fn last_used_member(members: &[String]) -> Option<String> {
+    let live = list_session_rows();
+    members
+        .iter()
+        .filter_map(|n| live.iter().find(|s| &s.name == n))
+        .max_by_key(|s| (s.last_attached, s.created))
+        .map(|s| s.name.clone())
+}
+
+/// Ensures `group` has at least one live session, recreating any saved
+/// members that tmux no longer has. Returns the group's live members.
 pub fn ensure_group(group: &str) -> Vec<String> {
+    if group == DEFAULT_GROUP {
+        adopt_orphans_into_default();
+    }
+    restore_missing_members(group);
+    stamp_group_ids(group);
     let members = group_members(group);
     if !members.is_empty() {
         return members;
@@ -293,7 +376,7 @@ pub fn close_group(group: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_member, resolve_members, stamp_ids, Member};
+    use super::{parse_member, refresh_members, stamp_ids, Member};
     use crate::tmux::Session;
 
     fn live(pairs: &[(&str, &str)]) -> Vec<Session> {
@@ -304,6 +387,7 @@ mod tests {
                 id: (*id).into(),
                 name: (*name).into(),
                 created: i as i64,
+                last_attached: i as i64,
             })
             .collect()
     }
@@ -332,7 +416,7 @@ mod tests {
             id: Some("$5".into()),
             name: "old".into(),
         }];
-        let (kept, changed) = resolve_members(members, &live(&[("$5", "new")]));
+        let (kept, changed) = refresh_members(members, &live(&[("$5", "new")]));
         assert!(changed);
         assert_eq!(
             kept,
@@ -344,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn prune_does_not_drop_renamed_id() {
+    fn missing_live_session_is_kept_on_disk() {
         let members = vec![
             Member {
                 id: Some("$1".into()),
@@ -355,10 +439,10 @@ mod tests {
                 name: "gone".into(),
             },
         ];
-        let (kept, changed) = resolve_members(members, &live(&[("$1", "keep")]));
-        assert!(changed);
-        assert_eq!(kept.len(), 1);
-        assert_eq!(kept[0].name, "keep");
+        let (kept, changed) = refresh_members(members, &live(&[("$1", "keep")]));
+        assert!(!changed);
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[1].name, "gone");
     }
 
     #[test]
@@ -370,7 +454,24 @@ mod tests {
         let before = live(&[("$7", "old")]);
         assert!(stamp_ids(&mut members, &before));
         assert_eq!(members[0].id.as_deref(), Some("$7"));
-        let (kept, _) = resolve_members(members, &live(&[("$7", "renamed")]));
+        let (kept, _) = refresh_members(members, &live(&[("$7", "renamed")]));
         assert_eq!(kept[0].name, "renamed");
+    }
+
+    #[test]
+    fn reused_id_after_restart_matches_by_name() {
+        let members = vec![Member {
+            id: Some("$1".into()),
+            name: "op3".into(),
+        }];
+        // $1 is now some other session, but op3 still exists under $9.
+        let (kept, changed) = refresh_members(
+            members,
+            &live(&[("$1", "new1"), ("$9", "op3")]),
+        );
+        assert!(changed);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].name, "op3");
+        assert_eq!(kept[0].id.as_deref(), Some("$9"));
     }
 }

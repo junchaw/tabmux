@@ -9,7 +9,7 @@ use std::process::Command;
 
 use actions::{cmd_new, cmd_nth, cmd_status, load_snapshot, save_snapshot};
 use bar::{cmd_click, cmd_click_close, cmd_render, cmd_render_msgs};
-use groups::{close_group, ensure_group, group_of_session, list_groups, members_for, DEFAULT_GROUP};
+use groups::{close_group, ensure_group, group_of_session, last_used_member, list_groups, members_for, DEFAULT_GROUP};
 use menu::cmd_menu;
 use tmux::{conf_dir, conf_path, launcher, tmux, tmux_ok, tmux_stdout, INACTIVE_BG, INACTIVE_FG, MSG_BG, SOCKET};
 
@@ -107,7 +107,7 @@ fn cmd_attach(group: Option<&str>) {
     ensure_server(&group);
     let members = ensure_group(&group);
     save_snapshot();
-    let target = &members[0];
+    let target = last_used_member(&members).unwrap_or_else(|| members[0].clone());
     if inside_this_server() {
         eprintln!("already inside tabmux ({SOCKET})");
         return;
