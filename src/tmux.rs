@@ -135,6 +135,7 @@ pub struct Session {
     pub id: String,
     pub name: String,
     pub created: i64,
+    pub last_attached: i64,
 }
 
 /// Live sessions, oldest first. `id` is tmux's `#{session_id}` (`$0`, `$1`, …)
@@ -146,7 +147,7 @@ pub fn list_session_rows() -> Vec<Session> {
     let out = tmux_stdout(&[
         "list-sessions",
         "-F",
-        "#{session_id}\t#{session_created}\t#{session_name}",
+        "#{session_id}\t#{session_created}\t#{session_last_attached}\t#{session_name}",
     ]);
     let mut rows = Vec::new();
     for line in out.lines() {
@@ -154,14 +155,20 @@ pub fn list_session_rows() -> Vec<Session> {
         if line.is_empty() {
             continue;
         }
-        let mut parts = line.splitn(3, '\t');
+        let mut parts = line.splitn(4, '\t');
         let id = parts.next().unwrap_or("").to_string();
         let created = parts.next().unwrap_or("0").parse().unwrap_or(0);
+        let last_attached = parts.next().unwrap_or("0").parse().unwrap_or(0);
         let name = parts.next().unwrap_or("").to_string();
         if id.is_empty() || name.is_empty() {
             continue;
         }
-        rows.push(Session { id, name, created });
+        rows.push(Session {
+            id,
+            name,
+            created,
+            last_attached,
+        });
     }
     rows.sort_by_key(|s| s.created);
     rows
