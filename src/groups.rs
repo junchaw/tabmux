@@ -378,29 +378,45 @@ pub fn ensure_group(group: &str) -> Vec<String> {
     vec![spawn_member(group)]
 }
 
-/// Closes one sub-session within its group. If it was the group's last
-/// session, spawns a replacement first so the client never gets bounced
-/// into an unrelated group. Returns the session the client ends up on.
-pub fn close_session(session: &str, client: Option<&str>) -> Option<String> {
+pub enum CloseOutcome {
+    SwitchedTo(String),
+    /// Last session in the group: client detached, session killed.
+    Quit,
+    Failed,
+}
+
+/// Closes one sub-session within its group. Closing the last session in
+/// the group detaches the client (tabmux quits) instead of spawning a
+/// replacement or bouncing into another group.
+pub fn close_session(session: &str, client: Option<&str>) -> CloseOutcome {
     let session = session.trim();
     if session.is_empty() {
-        return None;
+        return CloseOutcome::Failed;
     }
     let group = group_of_session(session).unwrap_or_else(|| DEFAULT_GROUP.to_string());
     let members = group_members(&group);
     if !members.iter().any(|m| m == session) {
-        return None;
+        return CloseOutcome::Failed;
     }
-    let target = if members.len() > 1 {
+    if members.len() > 1 {
         let idx = members.iter().position(|m| m == session).unwrap();
-        members[(idx + members.len() - 1) % members.len()].clone()
+        let target = members[(idx + members.len() - 1) % members.len()].clone();
+        switch_to(&target, client);
+        tmux(&["kill-session", "-t", &format!("={session}")]);
+        remove_member(&group, session);
+        return CloseOutcome::SwitchedTo(target);
+    }
+    if let Some(c) = client.filter(|s| !s.is_empty()) {
+        tmux(&["detach-client", "-t", c]);
     } else {
-        spawn_member(&group)
-    };
-    switch_to(&target, client);
+        tmux(&["detach-client"]);
+    }
     tmux(&["kill-session", "-t", &format!("={session}")]);
     remove_member(&group, session);
-    Some(target)
+    if load_raw(&group).is_empty() {
+        let _ = std::fs::remove_file(group_path(&group));
+    }
+    CloseOutcome::Quit
 }
 
 /// Kills every session in `group` and forgets the group entirely.
