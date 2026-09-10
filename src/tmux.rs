@@ -23,8 +23,36 @@ pub fn conf_path() -> PathBuf {
     conf_dir().join("tmux.conf")
 }
 
-pub fn msg_path() -> PathBuf {
+/// Legacy single file, or the per-group directory once migrated.
+fn messages_root() -> PathBuf {
     conf_dir().join("messages")
+}
+
+/// If `~/.config/tabmux/messages` is still a file, turn it into a directory
+/// and move the old stream to the default group so history isn't lost.
+pub fn migrate_messages() {
+    let root = messages_root();
+    if !root.is_file() {
+        return;
+    }
+    let tmp = conf_dir().join(".messages.legacy");
+    if std::fs::rename(&root, &tmp).is_err() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(&root);
+    let _ = std::fs::rename(&tmp, root.join("default"));
+}
+
+/// Per-group event log. Group name is used as the filename.
+pub fn msg_path(group: &str) -> PathBuf {
+    migrate_messages();
+    let group = group.trim();
+    let group = if group.is_empty() || group.contains('/') || group == "." || group == ".." {
+        "default"
+    } else {
+        group
+    };
+    messages_root().join(group)
 }
 
 pub fn status_dir() -> PathBuf {

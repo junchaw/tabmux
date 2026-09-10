@@ -17,8 +17,30 @@ pub fn now_secs() -> f64 {
         .unwrap_or(0.0)
 }
 
-pub fn load_messages() -> Vec<(f64, String)> {
-    let Ok(raw) = std::fs::read_to_string(msg_path()) else {
+fn group_for(session: Option<&str>, client: Option<&str>) -> String {
+    let sess = session
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            let out = if let Some(c) = client.filter(|s| !s.is_empty()) {
+                crate::tmux::tmux_stdout(&["display-message", "-c", c, "-p", "#{session_name}"])
+            } else {
+                crate::tmux::tmux_stdout(&["display-message", "-p", "#{session_name}"])
+            };
+            let s = out.trim();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        })
+        .unwrap_or_default();
+    crate::groups::group_of_session(&sess)
+        .unwrap_or_else(|| crate::groups::DEFAULT_GROUP.to_string())
+}
+
+pub fn load_messages(group: &str) -> Vec<(f64, String)> {
+    let Ok(raw) = std::fs::read_to_string(msg_path(group)) else {
         return Vec::new();
     };
     let mut items = Vec::new();
@@ -53,9 +75,10 @@ pub fn start_flash(msg: &str, client: Option<&str>) {
     if msg.is_empty() {
         return;
     }
-    let path = msg_path();
+    let group = group_for(None, client);
+    let path = msg_path(&group);
     ensure_dir(&path);
-    let mut items = load_messages();
+    let mut items = load_messages(&group);
     items.push((now_secs(), msg.to_string()));
     let keep = if items.len() > MSG_KEEP {
         &items[items.len() - MSG_KEEP..]

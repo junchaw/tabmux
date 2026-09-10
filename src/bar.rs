@@ -1,5 +1,5 @@
 use crate::actions::{fmt_age, load_messages, read_status, start_flash};
-use crate::groups::{close_session, members_for};
+use crate::groups::{close_session, group_of_session, members_for, DEFAULT_GROUP};
 use crate::tmux::{
     sty, switch_to, ACTIVE_BG, ACTIVE_FG, HINT, HINT_BG, HINT_FG, INACTIVE_BG, INACTIVE_FG,
     MSG_BG, MSG_FG, MSG_SEP, STATUS_ATTENTION_FG, STATUS_BUSY_FG,
@@ -91,9 +91,11 @@ fn hit(x: usize, total: usize, current: &str) -> Option<String> {
     None
 }
 
-pub fn cmd_render_msgs(width: usize) {
+pub fn cmd_render_msgs(width: usize, current: &str) {
     let width = width.max(1);
-    let stream = load_messages()
+    let current = current.trim().trim_matches(|c| c == '\'' || c == '"');
+    let group = group_of_session(current).unwrap_or_else(|| DEFAULT_GROUP.to_string());
+    let stream = load_messages(&group)
         .into_iter()
         .map(|(ts, text)| format!("{} {text}", fmt_age(ts)))
         .collect::<Vec<_>>()

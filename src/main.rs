@@ -41,7 +41,7 @@ set -g status-right-length 0
 set -g window-status-format ""
 set -g window-status-current-format ""
 set -g status-format[0] "#[align=left fill=@INACTIVE_BG@]#(@EXE@ render #{client_width} #{q:session_name})"
-set -g status-format[1] "#[align=left fill=@MSG_BG@]#(@EXE@ render-msgs #{client_width})"
+set -g status-format[1] "#[align=left fill=@MSG_BG@]#(@EXE@ render-msgs #{client_width} #{q:session_name})"
 
 set-hook -gu session-created
 set-hook -gu session-closed
@@ -192,7 +192,8 @@ fn main() {
         }
         "render-msgs" => {
             let w = rest.first().and_then(|s| s.parse().ok()).unwrap_or(80);
-            cmd_render_msgs(w);
+            let cur = rest.get(1).map(|s| s.as_str()).unwrap_or("");
+            cmd_render_msgs(w, cur);
         }
         "click" => {
             let x = rest.first().and_then(|s| s.parse().ok()).unwrap_or(0);
