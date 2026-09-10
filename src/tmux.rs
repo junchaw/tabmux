@@ -79,8 +79,7 @@ pub fn session_path(session: &str) -> Option<String> {
         None
     } else {
         Some(out.to_string())
-    }
-}
+    }}
 
 fn dirs_next_home() -> PathBuf {
     std::env::var_os("HOME")
@@ -153,8 +152,7 @@ pub fn list_session_rows() -> Vec<Session> {
 }
 
 pub fn list_sessions() -> Vec<String> {
-    list_session_rows().into_iter().map(|s| s.name).collect()
-}
+    list_session_rows().into_iter().map(|s| s.name).collect()}
 
 pub fn switch_to(session: &str, client: Option<&str>) {
     let target = format!("={session}");

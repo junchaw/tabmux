@@ -163,6 +163,13 @@ pub fn cmd_rename(old: &str, new_name: &str, _client: Option<&str>) -> Result<()
     Ok(())
 }
 
+/// Moves `session` by `delta` slots in its group (-1 = up, +1 = down).
+pub fn cmd_move(session: &str, delta: i32) -> Result<Vec<String>, String> {
+    let group = crate::groups::group_of_session(session)
+        .unwrap_or_else(|| crate::groups::DEFAULT_GROUP.to_string());
+    crate::groups::move_member(&group, session, delta)
+}
+
 pub fn cmd_nth(names: &[String], index: usize, client: Option<&str>) {
     if index >= 1 && index <= names.len() {
         switch_to(&names[index - 1], client);
