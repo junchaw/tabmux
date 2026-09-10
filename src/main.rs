@@ -1,18 +1,17 @@
 mod actions;
 mod bar;
+mod groups;
 mod menu;
 mod tmux;
 
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
-use actions::{cmd_close, cmd_new, cmd_nth, cmd_status, load_snapshot, save_snapshot};
+use actions::{cmd_new, cmd_nth, cmd_status, load_snapshot, save_snapshot};
 use bar::{cmd_click, cmd_click_close, cmd_render, cmd_render_msgs};
+use groups::{close_group, ensure_group, group_of_session, list_groups, members_for, DEFAULT_GROUP};
 use menu::cmd_menu;
-use tmux::{
-    conf_dir, conf_path, launcher, list_sessions, tmux, tmux_ok, tmux_stdout, INACTIVE_BG,
-    INACTIVE_FG, MSG_BG, SOCKET,
-};
+use tmux::{conf_dir, conf_path, launcher, tmux, tmux_ok, tmux_stdout, INACTIVE_BG, INACTIVE_FG, MSG_BG, SOCKET};
 
 fn write_conf() {
     let _ = std::fs::create_dir_all(conf_dir());
@@ -20,7 +19,7 @@ fn write_conf() {
     let mut nth = String::new();
     for i in 1..10 {
         nth.push_str(&format!(
-            "bind-key {i} run-shell -C \"{exe} nth {i}\"\n"
+            "bind-key {i} run-shell -C \"{exe} nth {i} '' #{{session_name}}\"\n"
         ));
     }
     let mut body = String::from(
@@ -51,8 +50,8 @@ set-hook -g client-detached "run-shell \"@EXE@ save\""
 
 unbind-key -n MouseDown3StatusLeft
 unbind-key -n MouseDown3StatusRight
-bind-key -n MouseDown1Status run-shell "@EXE@ click #{mouse_x} #{client_width} #{client_name} #{mouse_status_line}"
-bind-key -n MouseDown3Status run-shell "@EXE@ click-close #{mouse_x} #{client_width} #{client_name} #{mouse_status_line}"
+bind-key -n MouseDown1Status run-shell "@EXE@ click #{mouse_x} #{client_width} #{client_name} #{mouse_status_line} #{session_name}"
+bind-key -n MouseDown3Status run-shell "@EXE@ click-close #{mouse_x} #{client_width} #{client_name} #{mouse_status_line} #{session_name}"
 
 @NTH@
 "###,
@@ -67,7 +66,7 @@ bind-key -n MouseDown3Status run-shell "@EXE@ click-close #{mouse_x} #{client_wi
     let _ = std::fs::write(conf_path(), body);
 }
 
-fn ensure_server() {
+fn ensure_server(initial: &str) {
     write_conf();
     if tmux_ok(&["list-sessions"]) {
         let conf = conf_path().display().to_string();
@@ -90,7 +89,7 @@ fn ensure_server() {
         }
         None => {
             let _ = std::process::Command::new("tmux")
-                .args(["-L", SOCKET, "-f", &conf, "new-session", "-d", "-s", "main"])
+                .args(["-L", SOCKET, "-f", &conf, "new-session", "-d", "-s", initial])
                 .status();
         }
     }
@@ -103,32 +102,43 @@ fn inside_this_server() -> bool {
         .unwrap_or(false)
 }
 
-fn cmd_attach() {
-    ensure_server();
+fn cmd_attach(group: Option<&str>) {
+    let group = group.filter(|s| !s.is_empty()).unwrap_or(DEFAULT_GROUP).to_string();
+    ensure_server(&group);
+    let members = ensure_group(&group);
+    save_snapshot();
+    let target = &members[0];
     if inside_this_server() {
         eprintln!("already inside tabmux ({SOCKET})");
         return;
     }
     let err = Command::new("tmux")
-        .args(["-L", SOCKET, "attach-session"])
+        .args(["-L", SOCKET, "attach-session", "-t", &format!("={target}")])
         .env_remove("TMUX")
         .exec();
     panic!("exec tmux: {err}");
 }
 
 fn cmd_ls() {
-    let names = list_sessions();
-    let current = if names.is_empty() {
-        String::new()
-    } else {
+    let server_up = tmux_ok(&["list-sessions"]);
+    let current = if server_up {
         tmux_stdout(&["display-message", "-p", "#{session_name}"])
             .trim()
             .to_string()
+    } else {
+        String::new()
     };
-    for (i, name) in names.iter().enumerate() {
-        let mark = if *name == current { '*' } else { ' ' };
-        println!("{mark}{:>2}  {name}", i + 1);
+    let current_group = group_of_session(&current);
+    for group in list_groups() {
+        let mark = if Some(&group) == current_group.as_ref() { '*' } else { ' ' };
+        let count = groups::group_members(&group).len();
+        println!("{mark} {group:<16} {count} session{}", if count == 1 { "" } else { "s" });
     }
+}
+
+fn cmd_close_group(group: &str) {
+    let killed = close_group(group);
+    println!("closed {group} ({killed} session{})", if killed == 1 { "" } else { "s" });
 }
 
 fn usage() {
@@ -136,10 +146,14 @@ fn usage() {
         "\
 tabmux — isolated tmux with a bottom session tab bar
 
-  tabmux              attach (creates server if needed)
-  tabmux ls           list sessions
+Group sessions (each group is its own independent set of tabs):
+  tabmux              attach to the \"default\" group (creates server/group if needed)
+  tabmux attach [xx]  attach to group xx (defaults to \"default\")
+  tabmux ls           list groups
+  tabmux close [xx]   kill an entire group and all its sessions (defaults to \"default\")
+
+Sub-sessions (tabs within the current group):
   tabmux new [name]   create and switch
-  tabmux close [name] kill session
   tabmux status <busy|attention|idle> [session]
                       set a session's status dot (defaults to the calling pane's session)
   tabmux save         snapshot session names/paths for restore after a restart
@@ -163,13 +177,14 @@ fn opt(s: Option<&String>) -> Option<&str> {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
-        cmd_attach();
+        cmd_attach(None);
         return;
     }
     let cmd = args[0].as_str();
     let rest = &args[1..];
     match cmd {
         "-h" | "--help" | "help" => usage(),
+        "attach" => cmd_attach(opt(rest.first())),
         "render" => {
             let w = rest.first().and_then(|s| s.parse().ok()).unwrap_or(80);
             let cur = rest.get(1).map(|s| s.as_str()).unwrap_or("");
@@ -183,13 +198,15 @@ fn main() {
             let x = rest.first().and_then(|s| s.parse().ok()).unwrap_or(0);
             let w = rest.get(1).and_then(|s| s.parse().ok()).unwrap_or(80);
             let line = rest.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
-            cmd_click(x, w, opt(rest.get(2)), line);
+            let current = rest.get(4).map(|s| s.as_str()).unwrap_or("");
+            cmd_click(x, w, opt(rest.get(2)), line, current);
         }
         "click-close" => {
             let x = rest.first().and_then(|s| s.parse().ok()).unwrap_or(0);
             let w = rest.get(1).and_then(|s| s.parse().ok()).unwrap_or(80);
             let line = rest.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
-            cmd_click_close(x, w, opt(rest.get(2)), line);
+            let current = rest.get(4).map(|s| s.as_str()).unwrap_or("");
+            cmd_click_close(x, w, opt(rest.get(2)), line, current);
         }
         "new" => {
             cmd_new(
@@ -198,14 +215,14 @@ fn main() {
             );
         }
         "close" => {
-            cmd_close(
-                rest.first().map(|s| s.as_str()).unwrap_or(""),
-                opt(rest.get(1)),
-            );
+            let group = opt(rest.first()).unwrap_or(DEFAULT_GROUP);
+            cmd_close_group(group);
         }
         "nth" => {
             let i = rest.first().and_then(|s| s.parse().ok()).unwrap_or(0);
-            cmd_nth(i, opt(rest.get(1)));
+            let current = rest.get(2).map(|s| s.as_str()).unwrap_or("");
+            let names = members_for(current);
+            cmd_nth(&names, i, opt(rest.get(1)));
         }
         "menu" => cmd_menu(opt(rest.first())),
         "ls" => cmd_ls(),

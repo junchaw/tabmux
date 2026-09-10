@@ -1,7 +1,11 @@
 use std::io::{self, Write};
 
-use crate::actions::{cmd_close, cmd_new, cmd_nth, cmd_rename, start_flash};
-use crate::tmux::{launcher, list_sessions, tmux, unique_name};
+use crate::actions::{cmd_new, cmd_nth, cmd_rename, start_flash};
+use crate::groups::{
+    add_member, close_session, group_of_session, members_for, rename_member, stamp_group_ids,
+    DEFAULT_GROUP,
+};
+use crate::tmux::{launcher, tmux, unique_name};
 
 pub fn popup_menu(client: Option<&str>) {
     let exe = launcher().display().to_string();
@@ -144,8 +148,9 @@ pub fn cmd_menu(client: Option<&str>) {
         popup_menu(client);
         return;
     }
-    let names = list_sessions();
     let current = client_session(client);
+    let group = group_of_session(&current).unwrap_or_else(|| DEFAULT_GROUP.to_string());
+    let names = members_for(&current);
     let general = [
         ("x", "close the current session"),
         ("q", "close this menu"),
@@ -182,6 +187,9 @@ pub fn cmd_menu(client: Option<&str>) {
         'q' | '\r' | '\n' | '\u{1b}' => {}
         'n' => {
             let (new_name, created) = cmd_new(&prompt_new_session_name(), client);
+            if created {
+                add_member(&group, &new_name);
+            }
             start_flash(
                 &if created {
                     format!("created {new_name}")
@@ -198,11 +206,12 @@ pub fn cmd_menu(client: Option<&str>) {
                 current
             };
             if sess.is_empty() {
-                start_flash("won't close last session", client);
-            } else if cmd_close(&sess, client).is_some() {
-                start_flash(&format!("closed {sess}"), client);
+                start_flash("nothing to close", client);
             } else {
-                start_flash("won't close last session", client);
+                match close_session(&sess, client) {
+                    Some(next) => start_flash(&format!("closed {sess}, switched to {next}"), client),
+                    None => start_flash("nothing to close", client),
+                }
             }
         }
         'r' => {
@@ -215,17 +224,20 @@ pub fn cmd_menu(client: Option<&str>) {
                 start_flash("unknown action (r)", client);
             } else {
                 let new_name = prompt_text("rename session", &format!("empty keeps {sess}"));
+                stamp_group_ids(&group);
                 match cmd_rename(&sess, &new_name, client) {
                     Ok(()) if new_name.trim().is_empty() || new_name.trim() == sess => {}
-                    Ok(()) => start_flash(&format!("renamed {sess} to {}", new_name.trim()), client),
+                    Ok(()) => {
+                        rename_member(&group, &sess, new_name.trim());
+                        start_flash(&format!("renamed {sess} to {}", new_name.trim()), client);
+                    }
                     Err(e) => start_flash(&e, client),
                 }
             }
         }
         '1'..='9' => {
             let idx = ch.to_digit(10).unwrap() as usize;
-            let names = list_sessions();
-            cmd_nth(idx, client);
+            cmd_nth(&names, idx, client);
             if idx >= 1 && idx <= names.len() {
                 start_flash(&format!("switched to {}", names[idx - 1]), client);
             } else {
