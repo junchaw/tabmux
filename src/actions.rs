@@ -1,8 +1,9 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::tmux::{
-    ensure_dir, list_sessions, msg_path, session_path, sessions_path, switch_to, tmux, tmux_ok,
-    unique_name,
+    current_session_from_pane, ensure_dir, list_sessions, msg_path, session_path, sessions_path,
+    status_colors_path, status_path, switch_to, tmux, tmux_ok, unique_name, STATUS_ATTENTION_FG,
+    STATUS_BUSY_FG, STATUS_DEFAULT_FG, STATUS_IDLE_FG,
 };
 
 pub const MSG_KEEP: usize = 40;
@@ -159,8 +160,110 @@ pub fn cmd_rename(old: &str, new_name: &str, _client: Option<&str>) -> Result<()
     if !tmux_ok(&["rename-session", "-t", &format!("={old}"), new_name]) {
         return Err(format!("failed to rename {old}"));
     }
+    if let Ok(state) = std::fs::read_to_string(status_path(old)) {
+        let new_path = status_path(new_name);
+        ensure_dir(&new_path);
+        let _ = std::fs::write(&new_path, state);
+    }
+    let _ = std::fs::remove_file(status_path(old));
     save_snapshot();
     Ok(())
+}
+
+/// Last-reported status name, or None when unset / never set (no dot).
+pub fn read_status(session: &str) -> Option<String> {
+    let raw = std::fs::read_to_string(status_path(session)).ok()?;
+    let state = raw.trim().to_string();
+    if state.is_empty() || state == "unset" {
+        None
+    } else {
+        Some(state)
+    }
+}
+
+fn builtin_status_fg(state: &str) -> Option<&'static str> {
+    match state {
+        "busy" => Some(STATUS_BUSY_FG),
+        "attention" => Some(STATUS_ATTENTION_FG),
+        "idle" => Some(STATUS_IDLE_FG),
+        _ => None,
+    }
+}
+
+/// Color for a status name: ~/.config/tabmux/status-colors, then builtins,
+/// then a generic cyan so unknown names still show a dot.
+pub fn status_fg(state: &str) -> String {
+    if let Ok(raw) = std::fs::read_to_string(status_colors_path()) {
+        for line in raw.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some((name, color)) = line.split_once(char::is_whitespace) {
+                if name == state && !color.trim().is_empty() {
+                    return color.trim().to_string();
+                }
+            }
+        }
+    }
+    builtin_status_fg(state)
+        .unwrap_or(STATUS_DEFAULT_FG)
+        .to_string()
+}
+
+/// Built-in names plus anything listed in status-colors.
+pub fn status_choices() -> Vec<String> {
+    let mut names = vec![
+        "unset".into(),
+        "idle".into(),
+        "attention".into(),
+        "busy".into(),
+    ];
+    if let Ok(raw) = std::fs::read_to_string(status_colors_path()) {
+        for line in raw.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let name = line.split_whitespace().next().unwrap_or("");
+            if !name.is_empty() && !names.iter().any(|n| n == name) {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names
+}
+
+pub fn apply_status(state: &str, session: &str, client: Option<&str>) {
+    let path = status_path(session);
+    if state == "unset" {
+        let _ = std::fs::remove_file(&path);
+    } else {
+        ensure_dir(&path);
+        let _ = std::fs::write(&path, state);
+    }
+    if let Some(c) = client.filter(|s| !s.is_empty()) {
+        tmux(&["refresh-client", "-S", "-t", c]);
+    } else {
+        tmux(&["refresh-client", "-S"]);
+    }
+}
+
+pub fn cmd_status(state: &str, session: Option<&str>, client: Option<&str>) {
+    let state = state.trim();
+    if state.is_empty() {
+        eprintln!("tabmux status: missing state (busy, attention, idle, unset, or any name)");
+        std::process::exit(2);
+    }
+    let Some(session) = session
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(current_session_from_pane)
+    else {
+        eprintln!("tabmux status: not inside a tabmux pane, pass a session name");
+        std::process::exit(2);
+    };
+    apply_status(state, &session, client);
 }
 
 /// Moves `session` by `delta` slots in its group (-1 = up, +1 = down).

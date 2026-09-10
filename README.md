@@ -33,12 +33,29 @@ tabmux              # attach to the default group
 tabmux attach [xx]  # attach to group xx (no name = default)
 tabmux ls           # list groups
 tabmux close <xx>   # kill group xx and all its sessions
+tabmux status <name> [session]
+                    # set this tab's status dot (busy/attention/idle/unset or any name)
 tabmux save         # write session names and cwd (also on detach) so a restart can recreate tabs
 ```
 
 Each group is its own set of tabs. `tabmux attach new` opens (or creates) the
 `new` group without touching `default`. New tabs in a named group are
 `{group}-s1`, `{group}-s2`, …; `default` still uses `s1`, `s2`.
+
+## Status dot
+
+A tab can show a colored dot. Built-in names:
+
+```sh
+tabmux status busy       # red
+tabmux status attention  # yellow
+tabmux status idle       # green
+tabmux status unset      # hide the dot
+tabmux status review     # any other name: cyan unless mapped
+```
+
+Without a session argument this uses `$TMUX_PANE`. Extra names and colors go in
+`~/.config/tabmux/status-colors` (`name colour196` per line).
 
 ## Restoring sessions after a restart
 
