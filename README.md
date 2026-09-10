@@ -59,6 +59,7 @@ layout only, not what was running in the pane.
 | left-click a tab | switch session |
 | right-click a tab | close session |
 | `n` | new session |
+| `r` | rename current session |
 | `x` | close current session |
 | `1`–`9` | jump to nth tab |
 | `p` | previous session |

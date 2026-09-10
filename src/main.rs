@@ -162,6 +162,7 @@ Inside the app:
   left-click tab         switch
   right-click tab        close
   n                      new session
+  r                      rename current session
   x                      close current
   1-9                    jump to nth tab
   p                      previous session
