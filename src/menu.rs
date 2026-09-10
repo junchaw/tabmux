@@ -2,8 +2,7 @@ use std::io::{self, Write};
 
 use crate::actions::{cmd_new, cmd_nth, cmd_rename, start_flash};
 use crate::groups::{
-    add_member, close_session, group_of_session, members_for, rename_member, stamp_group_ids,
-    DEFAULT_GROUP,
+    close_session, group_of_session, members_for, rename_member, stamp_group_ids, DEFAULT_GROUP,
 };
 use crate::tmux::{launcher, tmux, unique_name};
 
@@ -86,8 +85,8 @@ fn term_size() -> (usize, usize) {
     }
 }
 
-fn prompt_new_session_name() -> String {
-    let default = unique_name();
+fn prompt_new_session_name(group: &str) -> String {
+    let default = unique_name(Some(group));
     prompt_text("new session", &format!("empty uses {default}"))
 }
 
@@ -186,10 +185,7 @@ pub fn cmd_menu(client: Option<&str>) {
     match ch {
         'q' | '\r' | '\n' | '\u{1b}' => {}
         'n' => {
-            let (new_name, created) = cmd_new(&prompt_new_session_name(), client);
-            if created {
-                add_member(&group, &new_name);
-            }
+            let (new_name, created) = cmd_new(&prompt_new_session_name(&group), client, Some(&group));
             start_flash(
                 &if created {
                     format!("created {new_name}")

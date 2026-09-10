@@ -187,11 +187,32 @@ pub fn switch_to(session: &str, client: Option<&str>) {
     }
 }
 
-pub fn unique_name() -> String {
+/// Session-name prefix for auto-created tabs. `default` (and empty) stay `s`;
+/// other groups become `{group}-s` so numbering is per-group.
+pub fn session_name_prefix(group: Option<&str>) -> String {
+    let g = group.map(str::trim).unwrap_or("");
+    if g.is_empty() || g == "default" {
+        return "s".into();
+    }
+    let safe: String = g
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    format!("{safe}-s")
+}
+
+pub fn unique_name(group: Option<&str>) -> String {
     let existing = list_sessions();
+    let prefix = session_name_prefix(group);
     let mut i = 1;
     loop {
-        let name = format!("s{i}");
+        let name = format!("{prefix}{i}");
         if !existing.iter().any(|s| s == &name) {
             return name;
         }
@@ -207,5 +228,24 @@ pub fn sty(bg: &str, fg: &str, text: &str, bold: bool) -> String {
 pub fn ensure_dir(p: &Path) {
     if let Some(parent) = p.parent() {
         let _ = std::fs::create_dir_all(parent);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_name_prefix;
+
+    #[test]
+    fn default_group_keeps_s_prefix() {
+        assert_eq!(session_name_prefix(None), "s");
+        assert_eq!(session_name_prefix(Some("default")), "s");
+        assert_eq!(session_name_prefix(Some("")), "s");
+    }
+
+    #[test]
+    fn named_group_prefixes() {
+        assert_eq!(session_name_prefix(Some("B")), "B-s");
+        assert_eq!(session_name_prefix(Some("ops")), "ops-s");
+        assert_eq!(session_name_prefix(Some("eso rollout")), "eso-rollout-s");
     }
 }

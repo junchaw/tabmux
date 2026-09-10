@@ -213,6 +213,7 @@ fn main() {
             cmd_new(
                 rest.first().map(|s| s.as_str()).unwrap_or(""),
                 opt(rest.get(1)),
+                None,
             );
         }
         "close" => {
