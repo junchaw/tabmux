@@ -191,6 +191,15 @@ fn refresh_bar(client: Option<&str>) {
     }
 }
 
+fn pad_line(text: &str, cols: usize) -> String {
+    let n = text.chars().count();
+    if n >= cols {
+        text.chars().take(cols).collect()
+    } else {
+        format!("{text}{}", " ".repeat(cols - n))
+    }
+}
+
 fn draw_reorder(names: &[String], moving: usize) {
     let (cols, rows) = term_size();
     let footer = "j/k or arrows  move · enter  confirm · esc  cancel";
@@ -199,23 +208,22 @@ fn draw_reorder(names: &[String], moving: usize) {
     let vis = rows.saturating_sub(header_rows + footer_rows).max(1);
     let start = if moving >= vis { moving + 1 - vis } else { 0 };
     let mut out = String::from("\x1b[H\x1b[J");
-    out.push_str("tabmux  reorder\n\n");
+    out.push_str("\x1b[38;5;216;1mtabmux\x1b[0m  \x1b[38;5;252mreorder\x1b[0m\n\n");
     for (i, name) in names.iter().enumerate().skip(start).take(vis) {
         let mark = if i == moving { "▸" } else { " " };
         let num = i + 1;
-        let mut line = if i == moving {
-            format!("  \x1b[1m{mark} {num:>2}  {name}\x1b[0m")
+        let body = format!("  {mark} {num:>2}  {name}");
+        let line = if i == moving {
+            // same blue as the active tab
+            format!("\x1b[48;5;25;38;5;231;1m{}\x1b[0m", pad_line(&body, cols))
         } else {
-            format!("  {mark} {num:>2}  {name}")
+            format!("\x1b[38;5;252m{}\x1b[0m", pad_line(&body, cols))
         };
-        if line.chars().count() > cols {
-            line = line.chars().take(cols).collect();
-        }
         out.push_str(&line);
         out.push('\n');
     }
     let r_footer = rows.max(footer_rows);
-    out.push_str(&format!("\x1b[{r_footer};1H{footer}"));
+    out.push_str(&format!("\x1b[{r_footer};1H\x1b[38;5;245m{footer}\x1b[0m"));
     let _ = io::stdout().write_all(out.as_bytes());
     let _ = io::stdout().flush();
 }
