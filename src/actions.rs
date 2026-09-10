@@ -127,15 +127,21 @@ pub fn load_snapshot() -> Vec<(String, String)> {
         .collect()
 }
 
-pub fn cmd_new(name: &str, client: Option<&str>) -> (String, bool) {
+pub fn cmd_new(name: &str, client: Option<&str>, group: Option<&str>) -> (String, bool) {
+    let group = group
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| group_for(None, client));
     let mut name = name.trim().to_string();
     if name.is_empty() {
-        name = unique_name();
+        name = unique_name(Some(&group));
     }
     let created = !tmux_ok(&["has-session", "-t", &format!("={name}")]);
     if created {
         tmux(&["new-session", "-d", "-s", &name]);
         save_snapshot();
+        crate::groups::add_member(&group, &name);
     }
     switch_to(&name, client);
     (name, created)

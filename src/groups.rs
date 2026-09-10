@@ -277,7 +277,7 @@ fn spawn_member(group: &str) -> String {
     let name = if !tmux_ok(&["has-session", "-t", &format!("={group}")]) {
         group.to_string()
     } else {
-        unique_name()
+        unique_name(Some(group))
     };
     tmux(&["new-session", "-d", "-s", &name]);
     add_member(group, &name);
