@@ -1,5 +1,5 @@
 use crate::actions::{fmt_age, load_messages, start_flash};
-use crate::groups::{close_session, group_of_session, members_for, DEFAULT_GROUP};
+use crate::groups::{close_session, group_of_session, members_for, CloseOutcome, DEFAULT_GROUP};
 use crate::tmux::{
     sty, switch_to, ACTIVE_BG, ACTIVE_FG, HINT, HINT_BG, HINT_FG, INACTIVE_BG, INACTIVE_FG, MSG_BG,
     MSG_FG, MSG_SEP,
@@ -174,7 +174,10 @@ pub fn cmd_click_close(x: usize, width: usize, client: Option<&str>, line: i32, 
         return;
     };
     match close_session(&target, client) {
-        Some(next) => start_flash(&format!("closed {target}, switched to {next}"), client),
-        None => start_flash(&format!("couldn't close {target}"), client),
+        CloseOutcome::SwitchedTo(next) => {
+            start_flash(&format!("closed {target}, switched to {next}"), client)
+        }
+        CloseOutcome::Quit => {}
+        CloseOutcome::Failed => start_flash(&format!("couldn't close {target}"), client),
     }
 }

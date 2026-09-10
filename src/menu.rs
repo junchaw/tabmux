@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use crate::actions::{cmd_new, cmd_nth, cmd_rename, start_flash};
 use crate::groups::{
     close_session, group_of_session, members_for, rename_member, set_member_order, stamp_group_ids,
-    DEFAULT_GROUP,
+    CloseOutcome, DEFAULT_GROUP,
 };
 use crate::tmux::{launcher, tmux, unique_name};
 
@@ -342,8 +342,11 @@ pub fn cmd_menu(client: Option<&str>) {
                 start_flash("nothing to close", client);
             } else {
                 match close_session(&sess, client) {
-                    Some(next) => start_flash(&format!("closed {sess}, switched to {next}"), client),
-                    None => start_flash("nothing to close", client),
+                    CloseOutcome::SwitchedTo(next) => {
+                        start_flash(&format!("closed {sess}, switched to {next}"), client)
+                    }
+                    CloseOutcome::Quit => {}
+                    CloseOutcome::Failed => start_flash("nothing to close", client),
                 }
             }
         }
