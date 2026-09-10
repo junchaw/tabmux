@@ -151,20 +151,9 @@ Group sessions (each group is its own independent set of tabs):
   tabmux attach [xx]  attach to group xx (no name = default)
   tabmux ls           list groups
   tabmux close <xx>   kill group xx and all its sessions
+  tabmux save         write session names and cwd so a restart can recreate tabs
 
-  tabmux new [name]   create a tab in the current group
-  tabmux save         snapshot session names/paths for restore after a restart
-
-Inside the app:
-  Ctrl-b                 command menu
-  left-click tab         switch
-  right-click tab        close
-  n                      new session
-  r                      rename current session
-  m                      reorder sessions
-  x                      close current
-  1-9                    jump to nth tab
-  p                      previous session
+Inside the app: Ctrl-b for the command menu.
 "
     );
 }
