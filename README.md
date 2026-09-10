@@ -29,13 +29,27 @@ Requires Rust 1.70+ and tmux 3.2+.
 ## Usage
 
 ```
-tabmux              # attach (creates the server if needed)
-tabmux ls           # list sessions
-tabmux new [name]   # create and switch
-tabmux close [name] # kill a session (keeps the last one)
+tabmux              # attach to the default group (creates server/group if needed)
+tabmux attach [xx]  # attach to group xx
+tabmux ls           # list groups
+tabmux close [xx]   # kill a group and all its sessions
+tabmux new [name]   # create a tab in the current group
 tabmux rename [old] <new>
                     # rename a session; old defaults to the current session
+tabmux save         # snapshot session names/paths (also done automatically)
 ```
+
+Each group is its own set of tabs. `tabmux attach new` opens (or creates) the
+`new` group without touching `default`. New tabs in a named group are
+`{group}-s1`, `{group}-s2`, …; `default` still uses `s1`, `s2`.
+
+## Restoring sessions after a restart
+
+tabmux keeps a snapshot of each session's name and working directory in
+`~/.config/tabmux/sessions`, updated on new/close/rename and on detach. If
+the tmux server itself goes away (`kill-server`, reboot, crash), the next
+`tabmux` attach recreates each session at its saved path. This restores
+layout only, not what was running in the pane.
 
 ## Inside the app
 
@@ -45,7 +59,6 @@ tabmux rename [old] <new>
 | left-click a tab | switch session |
 | right-click a tab | close session |
 | `n` | new session |
-| `r` | rename current session |
 | `x` | close current session |
 | `1`–`9` | jump to nth tab |
 | `p` | previous session |

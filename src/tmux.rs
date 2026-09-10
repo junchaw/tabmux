@@ -21,8 +21,65 @@ pub fn conf_path() -> PathBuf {
     conf_dir().join("tmux.conf")
 }
 
-pub fn msg_path() -> PathBuf {
+/// Legacy single file, or the per-group directory once migrated.
+fn messages_root() -> PathBuf {
     conf_dir().join("messages")
+}
+
+/// If `~/.config/tabmux/messages` is still a file, turn it into a directory
+/// and move the old stream to the default group so history isn't lost.
+pub fn migrate_messages() {
+    let root = messages_root();
+    if !root.is_file() {
+        return;
+    }
+    let tmp = conf_dir().join(".messages.legacy");
+    if std::fs::rename(&root, &tmp).is_err() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(&root);
+    let _ = std::fs::rename(&tmp, root.join("default"));
+}
+
+/// Per-group event log. Group name is used as the filename.
+pub fn msg_path(group: &str) -> PathBuf {
+    migrate_messages();
+    let group = group.trim();
+    let group = if group.is_empty() || group.contains('/') || group == "." || group == ".." {
+        "default"
+    } else {
+        group
+    };
+    messages_root().join(group)
+}
+
+pub fn sessions_path() -> PathBuf {
+    conf_dir().join("sessions")
+}
+
+pub fn groups_dir() -> PathBuf {
+    conf_dir().join("groups")
+}
+
+pub fn group_path(group: &str) -> PathBuf {
+    groups_dir().join(group)
+}
+
+/// Working directory of a session's first pane, if it exists.
+pub fn session_path(session: &str) -> Option<String> {
+    let out = tmux_stdout(&[
+        "display-message",
+        "-p",
+        "-t",
+        &format!("={session}:0.0"),
+        "#{pane_current_path}",
+    ]);
+    let out = out.trim();
+    if out.is_empty() {
+        None
+    } else {
+        Some(out.to_string())
+    }
 }
 
 fn dirs_next_home() -> PathBuf {
@@ -51,23 +108,52 @@ pub fn tmux_stdout(args: &[&str]) -> String {
     String::from_utf8_lossy(&tmux(args).stdout).to_string()
 }
 
-pub fn list_sessions() -> Vec<String> {
-    let out = tmux_stdout(&["list-sessions", "-F", "#{session_created}\t#{session_name}"]);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Session {
+    pub id: String,
+    pub name: String,
+    pub created: i64,
+    pub last_attached: i64,
+}
+
+/// Live sessions, oldest first. `id` is tmux's `#{session_id}` (`$0`, `$1`, …)
+/// and survives `rename-session`.
+pub fn list_session_rows() -> Vec<Session> {
     if !tmux(&["list-sessions"]).status.success() {
         return Vec::new();
     }
-    let mut rows: Vec<(i64, String)> = Vec::new();
+    let out = tmux_stdout(&[
+        "list-sessions",
+        "-F",
+        "#{session_id}\t#{session_created}\t#{session_last_attached}\t#{session_name}",
+    ]);
+    let mut rows = Vec::new();
     for line in out.lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let (ts, name) = line.split_once('\t').unwrap_or(("0", line));
-        let created = ts.parse().unwrap_or(0);
-        rows.push((created, name.to_string()));
+        let mut parts = line.splitn(4, '\t');
+        let id = parts.next().unwrap_or("").to_string();
+        let created = parts.next().unwrap_or("0").parse().unwrap_or(0);
+        let last_attached = parts.next().unwrap_or("0").parse().unwrap_or(0);
+        let name = parts.next().unwrap_or("").to_string();
+        if id.is_empty() || name.is_empty() {
+            continue;
+        }
+        rows.push(Session {
+            id,
+            name,
+            created,
+            last_attached,
+        });
     }
-    rows.sort_by_key(|(ts, _)| *ts);
-    rows.into_iter().map(|(_, n)| n).collect()
+    rows.sort_by_key(|s| s.created);
+    rows
+}
+
+pub fn list_sessions() -> Vec<String> {
+    list_session_rows().into_iter().map(|s| s.name).collect()
 }
 
 pub fn switch_to(session: &str, client: Option<&str>) {
@@ -79,11 +165,32 @@ pub fn switch_to(session: &str, client: Option<&str>) {
     }
 }
 
-pub fn unique_name() -> String {
+/// Session-name prefix for auto-created tabs. `default` (and empty) stay `s`;
+/// other groups become `{group}-s` so numbering is per-group.
+pub fn session_name_prefix(group: Option<&str>) -> String {
+    let g = group.map(str::trim).unwrap_or("");
+    if g.is_empty() || g == "default" {
+        return "s".into();
+    }
+    let safe: String = g
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    format!("{safe}-s")
+}
+
+pub fn unique_name(group: Option<&str>) -> String {
     let existing = list_sessions();
+    let prefix = session_name_prefix(group);
     let mut i = 1;
     loop {
-        let name = format!("s{i}");
+        let name = format!("{prefix}{i}");
         if !existing.iter().any(|s| s == &name) {
             return name;
         }
@@ -99,5 +206,24 @@ pub fn sty(bg: &str, fg: &str, text: &str, bold: bool) -> String {
 pub fn ensure_dir(p: &Path) {
     if let Some(parent) = p.parent() {
         let _ = std::fs::create_dir_all(parent);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_name_prefix;
+
+    #[test]
+    fn default_group_keeps_s_prefix() {
+        assert_eq!(session_name_prefix(None), "s");
+        assert_eq!(session_name_prefix(Some("default")), "s");
+        assert_eq!(session_name_prefix(Some("")), "s");
+    }
+
+    #[test]
+    fn named_group_prefixes() {
+        assert_eq!(session_name_prefix(Some("B")), "B-s");
+        assert_eq!(session_name_prefix(Some("ops")), "ops-s");
+        assert_eq!(session_name_prefix(Some("eso rollout")), "eso-rollout-s");
     }
 }
