@@ -9,7 +9,7 @@ mod tmux;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
-use actions::{cmd_new, cmd_nth, cmd_status, load_snapshot, save_snapshot};
+use actions::{cmd_new, cmd_nth, cmd_rename_cli, cmd_status, load_snapshot, save_snapshot};
 use bar::{cmd_click, cmd_click_close, cmd_render, cmd_render_msgs};
 use config::{apply_all_layouts, apply_layout, reset_global, setup_done, tmux_status_block};
 use groups::{close_group, ensure_group, group_of_session, last_used_member, list_groups, members_for, DEFAULT_GROUP};
@@ -159,6 +159,8 @@ Group sessions (each group is its own independent set of tabs):
   tabmux close <xx>   kill group xx and all its sessions
   tabmux status <name> [session]
                       set this tab's status dot (busy/attention/idle/unset or any name)
+  tabmux rename <name> [session]
+                      rename this tab (no session = current pane)
   tabmux save         write session names and cwd so a restart can recreate tabs
   tabmux config reset  clear global bar settings (getting started on next attach)
 
@@ -267,6 +269,13 @@ fn main() {
                 std::process::exit(2);
             };
             cmd_status(state, opt(rest.get(1)), None);
+        }
+        "rename" => {
+            let Some(name) = rest.first() else {
+                eprintln!("tabmux rename: missing name");
+                std::process::exit(2);
+            };
+            cmd_rename_cli(name, opt(rest.get(1)), None);
         }
         "save" => save_snapshot(),
         _ => {

@@ -262,6 +262,43 @@ pub fn cmd_status(state: &str, session: Option<&str>, client: Option<&str>) {
     apply_status(state, &session, client);
 }
 
+/// CLI: `tabmux rename <name> [session]` — same session resolution as `status`.
+pub fn cmd_rename_cli(new_name: &str, session: Option<&str>, client: Option<&str>) {
+    let new_name = new_name.trim();
+    if new_name.is_empty() {
+        eprintln!("tabmux rename: missing name");
+        std::process::exit(2);
+    }
+    let Some(session) = session
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(current_session_from_pane)
+    else {
+        eprintln!("tabmux rename: not inside a tabmux pane, pass a session name");
+        std::process::exit(2);
+    };
+    let group = crate::groups::group_of_session(&session);
+    if let Some(g) = &group {
+        crate::groups::stamp_group_ids(g);
+    }
+    match cmd_rename(&session, new_name, client) {
+        Ok(()) => {
+            if let Some(g) = &group {
+                crate::groups::rename_member(g, &session, new_name);
+            }
+            if let Some(c) = client.filter(|s| !s.is_empty()) {
+                tmux(&["refresh-client", "-S", "-t", c]);
+            } else {
+                tmux(&["refresh-client", "-S"]);
+            }
+        }
+        Err(e) => {
+            eprintln!("tabmux rename: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Moves `session` by `delta` slots in its group (-1 = up, +1 = down).
 pub fn cmd_move(session: &str, delta: i32) -> Result<Vec<String>, String> {
     let group = crate::groups::group_of_session(session)
