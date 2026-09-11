@@ -1,9 +1,6 @@
 use crate::actions::{fmt_age, load_messages, read_status, start_flash, status_fg};
 use crate::groups::{close_session, group_of_session, members_for, CloseOutcome, DEFAULT_GROUP};
-use crate::tmux::{
-    sty, switch_to, ACTIVE_BG, ACTIVE_FG, HINT, HINT_BG, HINT_FG, INACTIVE_BG, INACTIVE_FG, MSG_BG,
-    MSG_FG, MSG_SEP,
-};
+use crate::tmux::{sty, switch_to, HINT, MSG_SEP};
 
 const STATUS_DOT: &str = "\u{25cf}";
 
@@ -99,6 +96,7 @@ fn hit(x: usize, total: usize, current: &str) -> Option<String> {
 pub fn cmd_render_msgs(width: usize, current: &str) {
     let width = width.max(1);
     let current = current.trim().trim_matches(|c| c == '\'' || c == '"');
+    let th = crate::config::resolved_for_session(current).theme();
     let group = group_of_session(current).unwrap_or_else(|| DEFAULT_GROUP.to_string());
     let stream = load_messages(&group)
         .into_iter()
@@ -108,7 +106,7 @@ pub fn cmd_render_msgs(width: usize, current: &str) {
     let left = format!(" {HINT} ");
     let rest = width as isize - vis_len(&left) as isize;
     if rest <= 0 {
-        print!("{}", sty(HINT_BG, HINT_FG, &take_chars(&left, width), true));
+        print!("{}", sty(&th.hint_bg, &th.hint_fg, &take_chars(&left, width), true));
         return;
     }
     let rest = rest as usize;
@@ -128,14 +126,15 @@ pub fn cmd_render_msgs(width: usize, current: &str) {
     };
     print!(
         "{}{}",
-        sty(HINT_BG, HINT_FG, &left, true),
-        sty(MSG_BG, MSG_FG, &right, false)
+        sty(&th.hint_bg, &th.hint_fg, &left, true),
+        sty(&th.msg_bg, &th.msg_fg, &right, false)
     );
 }
 
 pub fn cmd_render(width: usize, current: &str) {
     let width = width.saturating_add(1).max(1);
     let current = current.trim().trim_matches(|c| c == '\'' || c == '"');
+    let th = crate::config::resolved_for_session(current).theme();
     let (names, _, widths) = layout(width, current);
     if names.is_empty() {
         print!(" ");
@@ -144,9 +143,9 @@ pub fn cmd_render(width: usize, current: &str) {
     let mut out = String::new();
     for (i, (name, w)) in names.iter().zip(widths.iter()).enumerate() {
         let (bg, fg, bold) = if name == current {
-            (ACTIVE_BG, ACTIVE_FG, true)
+            (th.active_bg.as_str(), th.active_fg.as_str(), true)
         } else {
-            (INACTIVE_BG, INACTIVE_FG, false)
+            (th.inactive_bg.as_str(), th.inactive_fg.as_str(), false)
         };
         let status = read_status(name);
         let fitted = label_for(i, name, *w, status.as_deref());
@@ -154,7 +153,7 @@ pub fn cmd_render(width: usize, current: &str) {
             if let Some(pos) = fitted.find(STATUS_DOT) {
                 let (before, rest) = fitted.split_at(pos);
                 let after = &rest[STATUS_DOT.len()..];
-                let dot_fg = status_fg(state);
+                let dot_fg = status_fg(state, &th);
                 out.push_str(&sty(bg, fg, before, bold));
                 out.push_str(&sty(bg, &dot_fg, STATUS_DOT, bold));
                 out.push_str(&sty(bg, fg, after, bold));
@@ -166,8 +165,8 @@ pub fn cmd_render(width: usize, current: &str) {
     let used: usize = widths.iter().sum();
     if used < width {
         out.push_str(&sty(
-            INACTIVE_BG,
-            INACTIVE_FG,
+            &th.inactive_bg,
+            &th.inactive_fg,
             &" ".repeat(width - used),
             false,
         ));

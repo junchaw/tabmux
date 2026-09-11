@@ -74,4 +74,10 @@ in the pane.
 
 ## Inside the app
 
-Press `Ctrl-b` for the command menu.
+Press `Ctrl-b` for the command menu (`c` for bar/theme settings).
+
+## Themes
+
+Built-in: `nord`, `catppuccin-mocha`, `tokyonight`, `gruvbox-dark`, `dracula`,
+`solarized-dark`, `rose-pine`. First attach asks you to pick one. Custom JSON or
+YAML: see `docs/themes.md` (examples in `contrib/themes/`).

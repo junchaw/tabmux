@@ -1,7 +1,6 @@
 use crate::groups::group_of_session;
-use crate::tmux::{
-    conf_dir, ensure_dir, launcher, list_sessions, tmux, INACTIVE_BG, MSG_BG,
-};
+use crate::theme::{load_theme, Theme};
+use crate::tmux::{conf_dir, ensure_dir, launcher, list_sessions, tmux};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pos {
@@ -26,10 +25,11 @@ impl Pos {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BarConfig {
     pub events: Pos,
     pub tabs: Pos,
+    pub theme: String,
 }
 
 impl Default for BarConfig {
@@ -37,7 +37,14 @@ impl Default for BarConfig {
         Self {
             events: Pos::Top,
             tabs: Pos::Bottom,
+            theme: "nord".into(),
         }
+    }
+}
+
+impl BarConfig {
+    pub fn theme(&self) -> Theme {
+        load_theme(&self.theme)
     }
 }
 
@@ -81,6 +88,12 @@ fn parse_file(raw: &str) -> (BarConfig, bool) {
                     cfg.tabs = p;
                 }
             }
+            "theme" => {
+                let t = v.trim();
+                if !t.is_empty() {
+                    cfg.theme = t.to_string();
+                }
+            }
             "setup_done" => {
                 setup = matches!(v.trim(), "1" | "true" | "yes");
             }
@@ -91,7 +104,12 @@ fn parse_file(raw: &str) -> (BarConfig, bool) {
 }
 
 fn format_file(cfg: &BarConfig, setup_done: bool) -> String {
-    let mut s = format!("events={}\ntabs={}\n", cfg.events.as_str(), cfg.tabs.as_str());
+    let mut s = format!(
+        "events={}\ntabs={}\ntheme={}\n",
+        cfg.events.as_str(),
+        cfg.tabs.as_str(),
+        cfg.theme
+    );
     if setup_done {
         s.push_str("setup_done=true\n");
     }
@@ -171,11 +189,14 @@ pub fn status_line_is_events(cfg: &BarConfig, line: i32) -> bool {
 /// Default tmux.conf snippet from the global bar config.
 pub fn tmux_status_block(exe: &str) -> String {
     let cfg = load_global();
+    let th = cfg.theme();
     let tabs_fmt = format!(
-        "set -g status-format[0] \"#[align=left fill={INACTIVE_BG}]#({exe} render #{{client_width}} #{{q:session_name}})\""
+        "set -g status-format[0] \"#[align=left fill={}]#({exe} render #{{client_width}} #{{q:session_name}})\"",
+        th.inactive_bg
     );
     let ev_fmt = format!(
-        "#[align=left fill={MSG_BG}]#({exe} render-msgs #{{client_width}} #{{q:session_name}})"
+        "#[align=left fill={}]#({exe} render-msgs #{{client_width}} #{{q:session_name}})",
+        th.msg_bg
     );
     if cfg.tabs == cfg.events {
         let pos = cfg.tabs.as_str();
@@ -185,14 +206,16 @@ pub fn tmux_status_block(exe: &str) -> String {
             )
         } else {
             format!(
-                "set -g status 2\nset -g status-position {pos}\nset -g status-format[0] \"{ev_fmt}\"\nset -g status-format[1] \"#[align=left fill={INACTIVE_BG}]#({exe} render #{{client_width}} #{{q:session_name}})\"\nset -g pane-border-status off\n"
+                "set -g status 2\nset -g status-position {pos}\nset -g status-format[0] \"{ev_fmt}\"\nset -g status-format[1] \"#[align=left fill={}]#({exe} render #{{client_width}} #{{q:session_name}})\"\nset -g pane-border-status off\n",
+                th.inactive_bg
             )
         }
     } else {
         format!(
-            "set -g status on\nset -g status-position {tabs}\n{tabs_fmt}\nset -g pane-border-status {events}\nset -g pane-border-style \"bg={MSG_BG},fg={MSG_BG}\"\nset -g pane-active-border-style \"bg={MSG_BG},fg={MSG_BG}\"\nset -g pane-border-format \"{ev_fmt}\"\n",
+            "set -g status on\nset -g status-position {tabs}\n{tabs_fmt}\nset -g pane-border-status {events}\nset -g pane-border-style \"bg={mbg},fg={mbg}\"\nset -g pane-active-border-style \"bg={mbg},fg={mbg}\"\nset -g pane-border-format \"{ev_fmt}\"\n",
             tabs = cfg.tabs.as_str(),
             events = cfg.events.as_str(),
+            mbg = th.msg_bg,
         )
     }
 }
@@ -223,12 +246,15 @@ pub fn apply_layout(session: &str) {
         return;
     }
     let cfg = resolved_for_session(session);
+    let th = cfg.theme();
     let exe = launcher().display().to_string();
     let tabs_fmt = format!(
-        "#[align=left fill={INACTIVE_BG}]#({exe} render #{{client_width}} #{{q:session_name}})"
+        "#[align=left fill={}]#({exe} render #{{client_width}} #{{q:session_name}})",
+        th.inactive_bg
     );
     let ev_fmt = format!(
-        "#[align=left fill={MSG_BG}]#({exe} render-msgs #{{client_width}} #{{q:session_name}})"
+        "#[align=left fill={}]#({exe} render-msgs #{{client_width}} #{{q:session_name}})",
+        th.msg_bg
     );
     let wins = window_targets(session);
 
@@ -257,7 +283,7 @@ pub fn apply_layout(session: &str) {
         tmux(&["set-option", "-t", session, "status", "on"]);
         tmux(&["set-option", "-t", session, "status-position", cfg.tabs.as_str()]);
         tmux(&["set-option", "-t", session, "status-format[0]", &tabs_fmt]);
-        let style = format!("bg={MSG_BG},fg={MSG_BG}");
+        let style = format!("bg={},fg={}", th.msg_bg, th.msg_bg);
         tmux(&["set-option", "-t", session, "pane-border-style", &style]);
         tmux(&["set-option", "-t", session, "pane-active-border-style", &style]);
         for w in &wins {
@@ -294,9 +320,10 @@ mod tests {
 
     #[test]
     fn parse_values() {
-        let (cfg, setup) = parse_file("events=bottom\ntabs=top\nsetup_done=true\n");
+        let (cfg, setup) = parse_file("events=bottom\ntabs=top\ntheme=dracula\nsetup_done=true\n");
         assert_eq!(cfg.events, Pos::Bottom);
         assert_eq!(cfg.tabs, Pos::Top);
+        assert_eq!(cfg.theme, "dracula");
         assert!(setup);
     }
 }

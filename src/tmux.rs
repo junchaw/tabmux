@@ -2,20 +2,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 pub const SOCKET: &str = "tabmux";
-pub const ACTIVE_BG: &str = "colour25";
-pub const ACTIVE_FG: &str = "colour231";
-pub const INACTIVE_BG: &str = "#3b4252";
-pub const INACTIVE_FG: &str = "#d8dee9";
 pub const HINT: &str = "Try Ctrl+B";
-pub const HINT_BG: &str = "colour216";
-pub const HINT_FG: &str = "colour235";
 pub const MSG_SEP: &str = " | ";
-pub const MSG_BG: &str = "#2e3440";
-pub const MSG_FG: &str = "#d8dee9";
-pub const STATUS_BUSY_FG: &str = "colour196";
-pub const STATUS_ATTENTION_FG: &str = "colour221";
-pub const STATUS_IDLE_FG: &str = "colour114";
-pub const STATUS_DEFAULT_FG: &str = "colour39";
 
 pub fn conf_dir() -> PathBuf {
     dirs_next_home().join(".config/tabmux")
