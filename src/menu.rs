@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 
-use crate::actions::{apply_status, cmd_new, cmd_nth, cmd_rename, read_status, start_flash, status_choices, status_fg};
+use crate::actions::{apply_status, cmd_new, cmd_nth, cmd_rename, cmd_step, cmd_step_status, read_status, start_flash, status_choices, status_fg};
 use crate::groups::{
     close_session, group_of_session, members_for, rename_member, set_member_order, stamp_group_ids,
     CloseOutcome, DEFAULT_GROUP,
@@ -124,6 +124,113 @@ fn term_size() -> (usize, usize) {
         } else {
             (80, 24)
         }
+    }
+}
+
+fn clip_pad(s: &str, w: usize) -> String {
+    let n = s.chars().count();
+    if n >= w {
+        s.chars().take(w).collect()
+    } else {
+        format!("{s}{}", " ".repeat(w - n))
+    }
+}
+
+fn box_rule(left: char, join: char, right: char, widths: &[usize]) -> String {
+    let mut s = String::from("\x1b[38;5;245m");
+    s.push(left);
+    for (i, w) in widths.iter().enumerate() {
+        if i > 0 {
+            s.push(join);
+        }
+        s.extend(std::iter::repeat('─').take(w + 2));
+    }
+    s.push(right);
+    s.push_str("\x1b[0m\n");
+    s
+}
+
+fn box_row(cells: &[(&str, usize, bool)]) -> String {
+    let mut s = String::from("\x1b[38;5;245m│\x1b[0m");
+    for (text, w, bold) in cells {
+        let body = clip_pad(text, *w);
+        s.push(' ');
+        if *bold && !text.is_empty() {
+            s.push_str("\x1b[1m");
+            s.push_str(&body);
+            s.push_str("\x1b[0m");
+        } else {
+            s.push_str(&body);
+        }
+        s.push(' ');
+        s.push_str("\x1b[38;5;245m│\x1b[0m");
+    }
+    s.push('\n');
+    s
+}
+
+fn render_menu_table(left: &[(String, String)], right: &[(String, String)], cols: usize) -> (String, usize) {
+    let key_w = left
+        .iter()
+        .chain(right.iter())
+        .map(|(k, _)| k.chars().count())
+        .max()
+        .unwrap_or(1)
+        .max("key".len());
+    let act_w = |items: &[(String, String)]| {
+        items
+            .iter()
+            .map(|(_, d)| d.chars().count())
+            .max()
+            .unwrap_or(0)
+            .max("action".len())
+    };
+    let aw_l = act_w(left);
+    let aw_r = act_w(right);
+    let two_w = 2 * key_w + aw_l + aw_r + 13;
+    let one_w = |a: usize| key_w + a + 7;
+    let two = two_w <= cols;
+    let mut out = String::new();
+    if two {
+        let widths = [key_w, aw_l, key_w, aw_r];
+        out.push_str(&box_rule('┌', '┬', '┐', &widths));
+        out.push_str(&box_row(&[
+            ("key", key_w, false),
+            ("action", aw_l, false),
+            ("key", key_w, false),
+            ("action", aw_r, false),
+        ]));
+        out.push_str(&box_rule('├', '┼', '┤', &widths));
+        let n = left.len().max(right.len());
+        for i in 0..n {
+            let (lk, ld) = left.get(i).map(|(k, d)| (k.as_str(), d.as_str())).unwrap_or(("", ""));
+            let (rk, rd) = right.get(i).map(|(k, d)| (k.as_str(), d.as_str())).unwrap_or(("", ""));
+            out.push_str(&box_row(&[
+                (lk, key_w, true),
+                (ld, aw_l, false),
+                (rk, key_w, true),
+                (rd, aw_r, false),
+            ]));
+        }
+        out.push_str(&box_rule('└', '┴', '┘', &widths));
+        return (out, two_w);
+    } else {
+        let mut rows: Vec<(&str, &str)> = left.iter().map(|(k, d)| (k.as_str(), d.as_str())).collect();
+        rows.push(("", ""));
+        rows.extend(right.iter().map(|(k, d)| (k.as_str(), d.as_str())));
+        let mut aw = rows.iter().map(|(_, d)| d.chars().count()).max().unwrap_or(0).max("action".len());
+        if one_w(aw) > cols {
+            aw = cols.saturating_sub(key_w + 7).max("action".len());
+        }
+        let widths = [key_w, aw];
+        out.push_str(&box_rule('┌', '┬', '┐', &widths));
+        out.push_str(&box_row(&[("key", key_w, false), ("action", aw, false)]));
+        out.push_str(&box_rule('├', '┼', '┤', &widths));
+        for (k, d) in rows {
+            out.push_str(&box_row(&[(k, key_w, true), (d, aw, false)]));
+        }
+        out.push_str(&box_rule('└', '┴', '┘', &widths));
+        (out, one_w(aw))
     }
 }
 
@@ -609,7 +716,19 @@ fn draw_status_pick(choices: &[String], idx: usize, session: &str, theme: &crate
     for (i, name) in choices.iter().enumerate().skip(start).take(vis) {
         let mark = if i == idx { "▸" } else { " " };
         let glyph = if name.as_str() == "unset" { "○" } else { "●" };
-        let body = pad_line(&format!("  {mark}  {glyph}  {name}"), cols);
+        let key = match name.as_str() {
+            "unset" => "u",
+            "idle" => "i",
+            "attention" => "a",
+            "busy" => "b",
+            _ => "",
+        };
+        let label = if key.is_empty() {
+            format!("  {mark}  {glyph}  {name}")
+        } else {
+            format!("  {mark}  {glyph}  {name:<12} {key}")
+        };
+        let body = pad_line(&label, cols);
         let painted = if name.as_str() == "unset" {
             format!("\x1b[38;5;245m{body}\x1b[0m")
         } else {
@@ -659,6 +778,22 @@ fn cmd_status_pick(session: &str, client: Option<&str>) -> Option<String> {
                 apply_status(&state, session, client);
                 return Some(state);
             }
+            Key::Char('u') | Key::Char('U') => {
+                apply_status("unset", session, client);
+                return Some("unset".into());
+            }
+            Key::Char('i') | Key::Char('I') => {
+                apply_status("idle", session, client);
+                return Some("idle".into());
+            }
+            Key::Char('a') | Key::Char('A') => {
+                apply_status("attention", session, client);
+                return Some("attention".into());
+            }
+            Key::Char('b') | Key::Char('B') => {
+                apply_status("busy", session, client);
+                return Some("busy".into());
+            }
             Key::Esc | Key::Char('q') => return None,
             _ => {}
         }
@@ -674,15 +809,17 @@ pub fn cmd_menu(client: Option<&str>) {
     let current = client_session(client);
     let group = group_of_session(&current).unwrap_or_else(|| DEFAULT_GROUP.to_string());
     let names = members_for(&current);
-    let general = [
-        ("x", "close the current session"),
+    let first = [
         ("q", "close this menu"),
         ("n", "create a new session"),
-        ("r", "rename the current session"),
-        ("m", "reorder sessions"),
-        ("s", "set status dot"),
-        ("c", "bar settings"),
+        ("c", "configs"),
         ("d", "detach (tabmux keeps running)"),
+    ];
+    let session_ops = [
+        ("x", "close the current session"),
+        ("r", "rename the current session"),
+        ("m", "reorder the current session"),
+        ("s", "set status dot"),
     ];
     let mut switches: Vec<(String, String)> = Vec::new();
     for (i, name) in names.iter().enumerate().take(9) {
@@ -692,19 +829,39 @@ pub fn cmd_menu(client: Option<&str>) {
             format!("switch to session {}: {name}{mark}", i + 1),
         ));
     }
-    switches.push(("p".into(), "switch to previous session".into()));
+    switches.push(("h [".into(), "switch to the previous session".into()));
+    switches.push(("l ]".into(), "switch to the next session".into()));
+    switches.push(("p".into(), "switch to the last session you were on".into()));
+    switches.push((";".into(), "switch to the next idle session".into()));
 
-    let mut out = String::from("\x1b[H\x1b[Jtabmux\n\n");
-    out.push_str("  key       action\n");
-    out.push_str("  ---       ------\n");
-    for (k, d) in general {
-        out.push_str(&format!("  \x1b[1m{k:<8}\x1b[0m  {d}\n"));
+    let mut left: Vec<(String, String)> = first
+        .iter()
+        .map(|(k, d)| ((*k).to_string(), (*d).to_string()))
+        .collect();
+    left.push((String::new(), String::new()));
+    left.extend(
+        session_ops
+            .iter()
+            .map(|(k, d)| ((*k).to_string(), (*d).to_string())),
+    );
+
+    let (cols, rows) = term_size();
+    let (table, tw) = render_menu_table(&left, &switches, cols);
+    let table_lines: Vec<&str> = table.lines().collect();
+    let title = "TabMux";
+    let footer = "press a key";
+    let block_h = 2 + table_lines.len() + 2;
+    let r0 = 1.max(rows.saturating_sub(block_h) / 2 + 1);
+    let c0 = 1.max(cols.saturating_sub(tw) / 2 + 1);
+    let title_c = c0 + tw.saturating_sub(title.len()) / 2;
+    let footer_c = c0 + tw.saturating_sub(footer.len()) / 2;
+    let mut out = String::from("\x1b[H\x1b[J");
+    out.push_str(&format!("\x1b[{r0};{title_c}H\x1b[38;5;216;1m{title}\x1b[0m"));
+    for (i, line) in table_lines.iter().enumerate() {
+        out.push_str(&format!("\x1b[{};{c0}H{line}", r0 + 2 + i));
     }
-    out.push('\n');
-    for (k, d) in &switches {
-        out.push_str(&format!("  \x1b[1m{k:<8}\x1b[0m  {d}\n"));
-    }
-    out.push_str("\n  press a key\n");
+    let footer_r = r0 + 2 + table_lines.len() + 1;
+    out.push_str(&format!("\x1b[{footer_r};{footer_c}H\x1b[38;5;245m{footer}\x1b[0m"));
     let _ = io::stdout().write_all(out.as_bytes());
     let _ = io::stdout().flush();
 
@@ -799,6 +956,22 @@ pub fn cmd_menu(client: Option<&str>) {
                 start_flash(&format!("switched to {}", names[idx - 1]), client);
             } else {
                 start_flash(&format!("unknown action ({ch})"), client);
+            }
+        }
+        '[' | 'h' => {
+            if let Some(to) = cmd_step(&current, -1, client) {
+                start_flash(&format!("switched to {to}"), client);
+            }
+        }
+        ']' | 'l' => {
+            if let Some(to) = cmd_step(&current, 1, client) {
+                start_flash(&format!("switched to {to}"), client);
+            }
+        }
+        ';' => {
+            match cmd_step_status(&current, "idle", client) {
+                Some(to) => start_flash(&format!("switched to {to}"), client),
+                None => start_flash("no idle session", client),
             }
         }
         'p' => {

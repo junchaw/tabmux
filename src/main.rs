@@ -226,6 +226,21 @@ fn main() {
             let names = members_for(current);
             cmd_nth(&names, i, opt(rest.get(1)));
         }
+        "prev" | "next" => {
+            let delta = if cmd == "prev" { -1 } else { 1 };
+            let client = opt(rest.first());
+            let current = rest
+                .get(1)
+                .map(|s| s.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| {
+                    tmux_stdout(&["display-message", "-p", "#{session_name}"])
+                        .trim()
+                        .to_string()
+                });
+            crate::actions::cmd_step(&current, delta, client);
+        }
         "menu" => cmd_menu(opt(rest.first())),
         "ls" => cmd_ls(),
         "layout" => {
