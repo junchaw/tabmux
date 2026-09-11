@@ -252,9 +252,171 @@ fn pick_pos(title: &str, current: crate::config::Pos) -> Option<crate::config::P
     }
 }
 
-/// First-run wizard: set global bar positions, then mark setup done.
+fn ansi_bg(tmux_color: &str) -> String {
+    let c = tmux_color.trim();
+    if let Some(n) = c.strip_prefix("colour") {
+        return format!("\x1b[48;5;{n}m");
+    }
+    if c.starts_with('#') && c.len() >= 7 {
+        let r = u8::from_str_radix(&c[1..3], 16).unwrap_or(40);
+        let g = u8::from_str_radix(&c[3..5], 16).unwrap_or(40);
+        let b = u8::from_str_radix(&c[5..7], 16).unwrap_or(40);
+        return format!("\x1b[48;2;{r};{g};{b}m");
+    }
+    "\x1b[48;5;236m".into()
+}
+
+fn paint_seg(bg: &str, fg: &str, text: &str, bold: bool) -> String {
+    format!(
+        "{}{}{}{}\x1b[0m",
+        ansi_bg(bg),
+        ansi_fg(fg),
+        if bold { "\x1b[1m" } else { "" },
+        text
+    )
+}
+
+fn draw_theme_preview(theme: &crate::theme::Theme, cols: usize) -> String {
+    let hint = " Try Ctrl+B ";
+    let hint_n = hint.chars().count();
+    let rest_n = cols.saturating_sub(hint_n);
+    let mut events = paint_seg(&theme.hint_bg, &theme.hint_fg, hint, true);
+    let msg = if rest_n > 0 {
+        let sample = "2m created pi agent | 4s switched to main";
+        let n = sample.chars().count();
+        let s = if n >= rest_n {
+            sample.chars().skip(n - rest_n).collect::<String>()
+        } else {
+            format!("{}{sample}", " ".repeat(rest_n - n))
+        };
+        paint_seg(&theme.msg_bg, &theme.msg_fg, &s, false)
+    } else {
+        String::new()
+    };
+    events.push_str(&msg);
+    events.push('\n');
+
+    let cells = [
+        ("● main (1)", true, Some(&theme.status_idle)),
+        ("● tabmux (2)", false, Some(&theme.status_busy)),
+        ("● pi agent (3)", false, Some(&theme.status_attention)),
+    ];
+    let n = cells.len();
+    let cell_w = if n == 0 { cols } else { cols / n };
+    let rem = if n == 0 { 0 } else { cols % n };
+    let mut tabs = String::new();
+    for (i, (label, active, dot)) in cells.iter().enumerate() {
+        let w = cell_w + if i < rem { 1 } else { 0 };
+        let (bg, fg, bold) = if *active {
+            (theme.active_bg.as_str(), theme.active_fg.as_str(), true)
+        } else {
+            (theme.inactive_bg.as_str(), theme.inactive_fg.as_str(), false)
+        };
+        let fitted = {
+            let n = label.chars().count();
+            if n >= w {
+                label.chars().take(w).collect::<String>()
+            } else {
+                let left = (w - n) / 2;
+                let right = w - n - left;
+                format!("{}{}{}", " ".repeat(left), label, " ".repeat(right))
+            }
+        };
+        if let Some(dot_fg) = dot {
+            if let Some(pos) = fitted.find('●') {
+                let (before, rest) = fitted.split_at(pos);
+                let after = rest.get(char::len_utf8('●')..).unwrap_or("");
+                tabs.push_str(&paint_seg(bg, fg, before, bold));
+                tabs.push_str(&paint_seg(bg, dot_fg, "●", bold));
+                tabs.push_str(&paint_seg(bg, fg, after, bold));
+                continue;
+            }
+        }
+        tabs.push_str(&paint_seg(bg, fg, &fitted, bold));
+    }
+    format!("{events}{tabs}\n")
+}
+
+fn draw_theme_pick(ids: &[String], idx: usize) {
+    let (cols, rows) = term_size();
+    let footer = "j/k  select · enter  confirm · esc  cancel";
+    let preview_lines = 4;
+    let header_rows = 2;
+    let footer_rows = 2;
+    let vis = rows
+        .saturating_sub(header_rows + preview_lines + footer_rows)
+        .max(1);
+    let start = if idx >= vis { idx + 1 - vis } else { 0 };
+    let mut out = String::from("\x1b[H\x1b[J");
+    out.push_str("\x1b[38;5;216;1mtabmux\x1b[0m  \x1b[38;5;252mtheme\x1b[0m\n\n");
+    let preview_id = ids.get(idx).map(|s| s.as_str()).unwrap_or("nord");
+    if preview_id != "from file…" {
+        let th = crate::theme::load_theme(preview_id);
+        out.push_str(&draw_theme_preview(&th, cols));
+        out.push('\n');
+    } else {
+        out.push_str("\x1b[38;5;245m  (pick a json/yaml file next)\x1b[0m\n\n\n\n");
+    }
+    for (i, name) in ids.iter().enumerate().skip(start).take(vis) {
+        let mark = if i == idx { "▸" } else { " " };
+        let body = pad_line(&format!("  {mark}  {name}"), cols);
+        let line = if i == idx {
+            format!("\x1b[1m{body}\x1b[0m")
+        } else {
+            format!("\x1b[38;5;252m{body}\x1b[0m")
+        };
+        out.push_str(&line);
+        out.push('\n');
+    }
+    let r_footer = rows.max(footer_rows);
+    out.push_str(&format!("\x1b[{r_footer};1H\x1b[38;5;245m{footer}\x1b[0m"));
+    let _ = io::stdout().write_all(out.as_bytes());
+    let _ = io::stdout().flush();
+}
+
+fn pick_theme(current: &str) -> Option<String> {
+    let mut ids = crate::theme::list_theme_ids();
+    ids.push("from file…".into());
+    let start = ids.iter().position(|s| s == current).unwrap_or(0);
+    let mut idx = start.min(ids.len() - 1);
+    loop {
+        draw_theme_pick(&ids, idx);
+        match read_key() {
+            Key::Char('j') | Key::Char('J') | Key::Down => {
+                if idx + 1 < ids.len() {
+                    idx += 1;
+                }
+            }
+            Key::Char('k') | Key::Char('K') | Key::Up => {
+                if idx > 0 {
+                    idx -= 1;
+                }
+            }
+            Key::Enter => {
+                if idx + 1 == ids.len() {
+                    let path = prompt_text("theme file", "json or yaml path");
+                    if path.is_empty() {
+                        return None;
+                    }
+                    return Some(path);
+                }
+                return Some(ids[idx].clone());
+            }
+            Key::Esc | Key::Char('q') => return None,
+            _ => {}
+        }
+    }
+}
+
+/// First-run wizard: theme, then bar positions.
 pub fn cmd_getting_started() {
     let mut cfg = crate::config::load_global();
+    if let Some(theme) = pick_theme(&cfg.theme) {
+        cfg.theme = theme;
+    } else {
+        crate::config::save_global(cfg);
+        return;
+    }
     let Some(events) = pick_pos("where is the Ctrl+B / events bar?", cfg.events) else {
         crate::config::save_global(cfg);
         return;
@@ -285,26 +447,33 @@ pub fn cmd_settings(group: &str, client: Option<&str>) {
         crate::config::resolved(Some(group))
     };
     let which = pick_list(
-        "which bar?",
-        &["Ctrl+B / events bar", "session tabs"],
+        "which setting?",
+        &["theme", "Ctrl+B / events bar", "session tabs"],
         0,
     );
     let Some(which) = which else {
         return;
     };
-    let cur = if which == 0 { cfg.events } else { cfg.tabs };
-    let title = if which == 0 {
-        "Ctrl+B / events bar position"
-    } else {
-        "session tabs position"
-    };
-    let Some(pos) = pick_pos(title, cur) else {
-        return;
-    };
     if which == 0 {
-        cfg.events = pos;
+        let Some(theme) = pick_theme(&cfg.theme) else {
+            return;
+        };
+        cfg.theme = theme;
     } else {
-        cfg.tabs = pos;
+        let cur = if which == 1 { cfg.events } else { cfg.tabs };
+        let title = if which == 1 {
+            "Ctrl+B / events bar position"
+        } else {
+            "session tabs position"
+        };
+        let Some(pos) = pick_pos(title, cur) else {
+            return;
+        };
+        if which == 1 {
+            cfg.events = pos;
+        } else {
+            cfg.tabs = pos;
+        }
     }
     if global {
         crate::config::save_global(cfg);
@@ -426,7 +595,7 @@ fn ansi_fg(tmux_color: &str) -> String {
     "\x1b[38;5;252m".into()
 }
 
-fn draw_status_pick(choices: &[String], idx: usize, session: &str) {
+fn draw_status_pick(choices: &[String], idx: usize, session: &str, theme: &crate::theme::Theme) {
     let (cols, rows) = term_size();
     let footer = "j/k or arrows  select · enter  set · esc  cancel";
     let header_rows = 3;
@@ -444,7 +613,7 @@ fn draw_status_pick(choices: &[String], idx: usize, session: &str) {
         let painted = if name.as_str() == "unset" {
             format!("\x1b[38;5;245m{body}\x1b[0m")
         } else {
-            let fg = ansi_fg(&status_fg(name));
+            let fg = ansi_fg(&status_fg(name, theme));
             format!(
                 "\x1b[38;5;252m{}\x1b[0m",
                 body.replacen(glyph, &format!("{fg}{glyph}\x1b[38;5;252m"), 1)
@@ -471,8 +640,9 @@ fn cmd_status_pick(session: &str, client: Option<&str>) -> Option<String> {
     }
     let current = read_status(session).unwrap_or_else(|| "unset".into());
     let mut idx = choices.iter().position(|s| s == &current).unwrap_or(0);
+    let theme = crate::config::resolved_for_session(session).theme();
     loop {
-        draw_status_pick(&choices, idx, session);
+        draw_status_pick(&choices, idx, session, &theme);
         match read_key() {
             Key::Char('j') | Key::Char('J') | Key::Down => {
                 if idx + 1 < choices.len() {

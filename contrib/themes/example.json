@@ -1,0 +1,15 @@
+{
+  "name": "example",
+  "active_bg": "#89b4fa",
+  "active_fg": "#1e1e2e",
+  "inactive_bg": "#313244",
+  "inactive_fg": "#cdd6f4",
+  "hint_bg": "#f9e2af",
+  "hint_fg": "#1e1e2e",
+  "msg_bg": "#1e1e2e",
+  "msg_fg": "#cdd6f4",
+  "status_busy": "#f38ba8",
+  "status_attention": "#f9e2af",
+  "status_idle": "#a6e3a1",
+  "status_default": "#89b4fa"
+}

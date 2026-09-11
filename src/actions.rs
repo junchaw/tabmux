@@ -2,8 +2,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::tmux::{
     current_session_from_pane, ensure_dir, list_sessions, msg_path, session_path, sessions_path,
-    status_colors_path, status_path, switch_to, tmux, tmux_ok, unique_name, STATUS_ATTENTION_FG,
-    STATUS_BUSY_FG, STATUS_DEFAULT_FG, STATUS_IDLE_FG,
+    status_colors_path, status_path, switch_to, tmux, tmux_ok, unique_name,
 };
 
 pub const MSG_KEEP: usize = 40;
@@ -181,18 +180,17 @@ pub fn read_status(session: &str) -> Option<String> {
     }
 }
 
-fn builtin_status_fg(state: &str) -> Option<&'static str> {
+fn theme_status_fg(state: &str, theme: &crate::theme::Theme) -> String {
     match state {
-        "busy" => Some(STATUS_BUSY_FG),
-        "attention" => Some(STATUS_ATTENTION_FG),
-        "idle" => Some(STATUS_IDLE_FG),
-        _ => None,
+        "busy" => theme.status_busy.clone(),
+        "attention" => theme.status_attention.clone(),
+        "idle" => theme.status_idle.clone(),
+        _ => theme.status_default.clone(),
     }
 }
 
-/// Color for a status name: ~/.config/tabmux/status-colors, then builtins,
-/// then a generic cyan so unknown names still show a dot.
-pub fn status_fg(state: &str) -> String {
+/// Color for a status name: ~/.config/tabmux/status-colors, then the active theme.
+pub fn status_fg(state: &str, theme: &crate::theme::Theme) -> String {
     if let Ok(raw) = std::fs::read_to_string(status_colors_path()) {
         for line in raw.lines() {
             let line = line.trim();
@@ -206,9 +204,7 @@ pub fn status_fg(state: &str) -> String {
             }
         }
     }
-    builtin_status_fg(state)
-        .unwrap_or(STATUS_DEFAULT_FG)
-        .to_string()
+    theme_status_fg(state, theme)
 }
 
 /// Built-in names plus anything listed in status-colors.

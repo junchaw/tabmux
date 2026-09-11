@@ -3,6 +3,7 @@ mod bar;
 mod config;
 mod groups;
 mod menu;
+mod theme;
 mod tmux;
 
 use std::os::unix::process::CommandExt;
@@ -13,7 +14,7 @@ use bar::{cmd_click, cmd_click_close, cmd_render, cmd_render_msgs};
 use config::{apply_all_layouts, apply_layout, reset_global, setup_done, tmux_status_block};
 use groups::{close_group, ensure_group, group_of_session, last_used_member, list_groups, members_for, DEFAULT_GROUP};
 use menu::{cmd_getting_started, cmd_menu};
-use tmux::{conf_dir, conf_path, launcher, tmux, tmux_ok, tmux_stdout, INACTIVE_BG, INACTIVE_FG, MSG_BG, SOCKET};
+use tmux::{conf_dir, conf_path, launcher, tmux, tmux_ok, tmux_stdout, SOCKET};
 
 fn write_conf() {
     let _ = std::fs::create_dir_all(conf_dir());
@@ -58,9 +59,9 @@ bind-key -n MouseDown3Status run-shell "@EXE@ click-close #{mouse_x} #{client_wi
     body = body
         .replace("@SOCKET@", SOCKET)
         .replace("@EXE@", &exe)
-        .replace("@INACTIVE_BG@", INACTIVE_BG)
-        .replace("@INACTIVE_FG@", INACTIVE_FG)
-        .replace("@MSG_BG@", MSG_BG)
+        .replace("@INACTIVE_BG@", &crate::config::load_global().theme().inactive_bg)
+        .replace("@INACTIVE_FG@", &crate::config::load_global().theme().inactive_fg)
+        .replace("@MSG_BG@", &crate::config::load_global().theme().msg_bg)
         .replace("@STATUS_BLOCK@", &tmux_status_block(&exe))
         .replace("@NTH@", &nth);
     let _ = std::fs::write(conf_path(), body);
