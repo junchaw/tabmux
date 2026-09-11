@@ -1,5 +1,6 @@
 mod actions;
 mod bar;
+mod config;
 mod groups;
 mod menu;
 mod tmux;
@@ -9,8 +10,9 @@ use std::process::Command;
 
 use actions::{cmd_new, cmd_nth, cmd_status, load_snapshot, save_snapshot};
 use bar::{cmd_click, cmd_click_close, cmd_render, cmd_render_msgs};
+use config::{apply_all_layouts, apply_layout, reset_global, setup_done, tmux_status_block};
 use groups::{close_group, ensure_group, group_of_session, last_used_member, list_groups, members_for, DEFAULT_GROUP};
-use menu::cmd_menu;
+use menu::{cmd_getting_started, cmd_menu};
 use tmux::{conf_dir, conf_path, launcher, tmux, tmux_ok, tmux_stdout, INACTIVE_BG, INACTIVE_FG, MSG_BG, SOCKET};
 
 fn write_conf() {
@@ -30,8 +32,6 @@ set -g default-terminal "screen-256color"
 unbind-key C-b
 set -g prefix None
 bind-key -n C-b display-popup -B -w 100% -h 100% -E "@EXE@ menu #{client_name}"
-set -g status 2
-set -g status-position bottom
 set -g status-interval 1
 set -g status-style "bg=@INACTIVE_BG@,fg=@INACTIVE_FG@"
 set -g status-left ""
@@ -40,10 +40,9 @@ set -g status-left-length 0
 set -g status-right-length 0
 set -g window-status-format ""
 set -g window-status-current-format ""
-set -g status-format[0] "#[align=left fill=@INACTIVE_BG@]#(@EXE@ render #{client_width} #{q:session_name})"
-set -g status-format[1] "#[align=left fill=@MSG_BG@]#(@EXE@ render-msgs #{client_width} #{q:session_name})"
-
+@STATUS_BLOCK@
 set-hook -gu session-created
+set-hook -g session-created "run-shell \"@EXE@ layout #{q:session_name}\""
 set-hook -gu session-closed
 set-hook -gu client-session-changed
 set-hook -g client-detached "run-shell \"@EXE@ save\""
@@ -62,6 +61,7 @@ bind-key -n MouseDown3Status run-shell "@EXE@ click-close #{mouse_x} #{client_wi
         .replace("@INACTIVE_BG@", INACTIVE_BG)
         .replace("@INACTIVE_FG@", INACTIVE_FG)
         .replace("@MSG_BG@", MSG_BG)
+        .replace("@STATUS_BLOCK@", &tmux_status_block(&exe))
         .replace("@NTH@", &nth);
     let _ = std::fs::write(conf_path(), body);
 }
@@ -71,6 +71,7 @@ fn ensure_server(initial: &str) {
     if tmux_ok(&["list-sessions"]) {
         let conf = conf_path().display().to_string();
         tmux(&["source-file", &conf]);
+        apply_all_layouts();
         return;
     }
     let conf = conf_path().display().to_string();
@@ -94,6 +95,7 @@ fn ensure_server(initial: &str) {
         }
     }
     save_snapshot();
+    apply_all_layouts();
 }
 
 fn inside_this_server() -> bool {
@@ -104,6 +106,9 @@ fn inside_this_server() -> bool {
 
 fn cmd_attach(group: Option<&str>) {
     let group = group.filter(|s| !s.is_empty()).unwrap_or(DEFAULT_GROUP).to_string();
+    if !setup_done() && unsafe { libc::isatty(0) } != 0 {
+        cmd_getting_started();
+    }
     ensure_server(&group);
     let members = ensure_group(&group);
     save_snapshot();
@@ -154,6 +159,7 @@ Group sessions (each group is its own independent set of tabs):
   tabmux status <name> [session]
                       set this tab's status dot (busy/attention/idle/unset or any name)
   tabmux save         write session names and cwd so a restart can recreate tabs
+  tabmux config reset  clear global bar settings (getting started on next attach)
 
 Inside the app: Ctrl-b for the command menu.
 "
@@ -221,6 +227,24 @@ fn main() {
         }
         "menu" => cmd_menu(opt(rest.first())),
         "ls" => cmd_ls(),
+        "layout" => {
+            let sess = rest.first().map(|s| s.as_str()).unwrap_or("");
+            if sess.is_empty() {
+                apply_all_layouts();
+            } else {
+                apply_layout(sess);
+            }
+        }
+        "config" => match rest.first().map(|s| s.as_str()) {
+            Some("reset") => {
+                reset_global();
+                println!("global config cleared; next attach runs getting started");
+            }
+            _ => {
+                eprintln!("tabmux config reset");
+                std::process::exit(2);
+            }
+        },
         "status" => {
             let Some(state) = rest.first() else {
                 eprintln!("tabmux status: missing state (busy, attention, idle, or any name)");

@@ -191,6 +191,141 @@ fn refresh_bar(client: Option<&str>) {
     }
 }
 
+fn draw_pick(title: &str, items: &[&str], idx: usize) {
+    let (cols, rows) = term_size();
+    let footer = "j/k or arrows  select · enter  confirm · esc  cancel";
+    let header_rows = 3;
+    let footer_rows = 2;
+    let vis = rows.saturating_sub(header_rows + footer_rows).max(1);
+    let start = if idx >= vis { idx + 1 - vis } else { 0 };
+    let mut out = String::from("\x1b[H\x1b[J");
+    out.push_str(&format!(
+        "\x1b[38;5;216;1mtabmux\x1b[0m  \x1b[38;5;252m{title}\x1b[0m\n\n"
+    ));
+    for (i, name) in items.iter().enumerate().skip(start).take(vis) {
+        let mark = if i == idx { "▸" } else { " " };
+        let body = pad_line(&format!("  {mark}  {name}"), cols);
+        let line = if i == idx {
+            format!("\x1b[1m{body}\x1b[0m")
+        } else {
+            format!("\x1b[38;5;252m{body}\x1b[0m")
+        };
+        out.push_str(&line);
+        out.push('\n');
+    }
+    let r_footer = rows.max(footer_rows);
+    out.push_str(&format!("\x1b[{r_footer};1H\x1b[38;5;245m{footer}\x1b[0m"));
+    let _ = io::stdout().write_all(out.as_bytes());
+    let _ = io::stdout().flush();
+}
+
+fn pick_list(title: &str, items: &[&str], start: usize) -> Option<usize> {
+    if items.is_empty() {
+        return None;
+    }
+    let mut idx = start.min(items.len() - 1);
+    loop {
+        draw_pick(title, items, idx);
+        match read_key() {
+            Key::Char('j') | Key::Char('J') | Key::Down => {
+                if idx + 1 < items.len() {
+                    idx += 1;
+                }
+            }
+            Key::Char('k') | Key::Char('K') | Key::Up => {
+                if idx > 0 {
+                    idx -= 1;
+                }
+            }
+            Key::Enter => return Some(idx),
+            Key::Esc | Key::Char('q') => return None,
+            _ => {}
+        }
+    }
+}
+
+fn pick_pos(title: &str, current: crate::config::Pos) -> Option<crate::config::Pos> {
+    let start = if current == crate::config::Pos::Bottom { 1 } else { 0 };
+    match pick_list(title, &["top", "bottom"], start)? {
+        0 => Some(crate::config::Pos::Top),
+        _ => Some(crate::config::Pos::Bottom),
+    }
+}
+
+/// First-run wizard: set global bar positions, then mark setup done.
+pub fn cmd_getting_started() {
+    let mut cfg = crate::config::load_global();
+    let Some(events) = pick_pos("where is the Ctrl+B / events bar?", cfg.events) else {
+        crate::config::save_global(cfg);
+        return;
+    };
+    cfg.events = events;
+    let Some(tabs) = pick_pos("where are the session tabs?", cfg.tabs) else {
+        crate::config::save_global(cfg);
+        return;
+    };
+    cfg.tabs = tabs;
+    crate::config::save_global(cfg);
+    crate::config::apply_all_layouts();
+}
+
+/// Settings from Ctrl-b: global default or current group, then one bar position.
+pub fn cmd_settings(group: &str, client: Option<&str>) {
+    let scope_labels = [
+        "global default",
+        "current group only",
+    ];
+    let Some(scope) = pick_list("configure", &scope_labels, 0) else {
+        return;
+    };
+    let global = scope == 0;
+    let mut cfg = if global {
+        crate::config::load_global()
+    } else {
+        crate::config::resolved(Some(group))
+    };
+    let which = pick_list(
+        "which bar?",
+        &["Ctrl+B / events bar", "session tabs"],
+        0,
+    );
+    let Some(which) = which else {
+        return;
+    };
+    let cur = if which == 0 { cfg.events } else { cfg.tabs };
+    let title = if which == 0 {
+        "Ctrl+B / events bar position"
+    } else {
+        "session tabs position"
+    };
+    let Some(pos) = pick_pos(title, cur) else {
+        return;
+    };
+    if which == 0 {
+        cfg.events = pos;
+    } else {
+        cfg.tabs = pos;
+    }
+    if global {
+        crate::config::save_global(cfg);
+        if crate::config::group_has_override(group) {
+            let ans = pick_list(
+                "there is override for this group, remove reset?",
+                &["Yes", "No"],
+                1,
+            );
+            if ans == Some(0) {
+                crate::config::remove_group_override(group);
+            }
+        }
+        crate::config::apply_all_layouts();
+    } else {
+        crate::config::save_group_override(group, cfg);
+        crate::config::apply_all_layouts();
+    }
+    start_flash("saved bar layout", client);
+}
+
 fn pad_line(text: &str, cols: usize) -> String {
     let n = text.chars().count();
     if n >= cols {
@@ -376,6 +511,7 @@ pub fn cmd_menu(client: Option<&str>) {
         ("r", "rename the current session"),
         ("m", "reorder sessions"),
         ("s", "set status dot"),
+        ("c", "bar settings"),
         ("d", "detach (tabmux keeps running)"),
     ];
     let mut switches: Vec<(String, String)> = Vec::new();
@@ -502,6 +638,9 @@ pub fn cmd_menu(client: Option<&str>) {
                 tmux(&["switch-client", "-p"]);
             }
             start_flash(&format!("switched to {}", client_session(client)), client);
+        }
+        'c' => {
+            cmd_settings(&group, client);
         }
         'd' => {
             if let Some(c) = client {

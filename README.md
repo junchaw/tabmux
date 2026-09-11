@@ -1,16 +1,16 @@
 # tabmux
 
-Isolated tmux with a bottom session tab bar and a message ticker.
+Isolated tmux with a bottom session tab bar and a top message ticker.
 
 ```
++-------------+----------------------------------------------------------------+
+| Try Ctrl+B  |                     2m created pi agent | 4s switched to main  |
 +------------------------------------------------------------------------------+
 | $ ssh gpu-box                                                                |
 | connected.                                                                   |
 |                                                                              |
 +-------------------+-------------------+-------------------+------------------+
 |     main (1)      |  tabmux dev (2)   |  claude code (3)  |   pi agent (4)   |
-+-------------+----------------------------------------------------------------+
-| Try Ctrl+B  |                     2m created pi agent | 4s switched to main  |
 +-------------+----------------------------------------------------------------+
 ```
 
@@ -36,6 +36,7 @@ tabmux close <xx>   # kill group xx and all its sessions
 tabmux status <name> [session]
                     # set this tab's status dot (busy/attention/idle/unset or any name)
 tabmux save         # write session names and cwd (also on detach) so a restart can recreate tabs
+tabmux config reset # clear global bar settings; next attach runs getting started
 ```
 
 Each group is its own set of tabs. `tabmux attach new` opens (or creates) the
