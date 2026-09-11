@@ -274,3 +274,42 @@ pub fn cmd_nth(names: &[String], index: usize, client: Option<&str>) {
         switch_to(&names[index - 1], client);
     }
 }
+
+/// Adjacent tab in group order. Negative delta is earlier (left), positive is next.
+pub fn cmd_step(current: &str, delta: i32, client: Option<&str>) -> Option<String> {
+    let names = crate::groups::members_for(current);
+    if names.len() < 2 {
+        return None;
+    }
+    let i = names.iter().position(|s| s == current).unwrap_or(0) as i32;
+    let n = names.len() as i32;
+    let j = ((i + delta) % n + n) % n;
+    let target = names[j as usize].clone();
+    switch_to(&target, client);
+    Some(target)
+}
+
+/// Next session in bar order whose status is `want` (wraps). Skips current.
+pub fn cmd_step_status(
+    current: &str,
+    want: &str,
+    client: Option<&str>,
+) -> Option<String> {
+    let names = crate::groups::members_for(current);
+    if names.is_empty() {
+        return None;
+    }
+    let start = names.iter().position(|s| s == current).unwrap_or(0);
+    let n = names.len();
+    for k in 1..=n {
+        let name = &names[(start + k) % n];
+        if name == current {
+            continue;
+        }
+        if read_status(name).as_deref() == Some(want) {
+            switch_to(name, client);
+            return Some(name.clone());
+        }
+    }
+    None
+}
