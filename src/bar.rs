@@ -176,7 +176,8 @@ pub fn cmd_render(width: usize, current: &str) {
 }
 
 pub fn cmd_click(x: usize, width: usize, client: Option<&str>, line: i32, current: &str) {
-    if line >= 1 {
+    let cfg = crate::config::resolved_for_session(current);
+    if crate::config::status_line_is_events(&cfg, line) {
         crate::menu::popup_menu(client);
         return;
     }
@@ -187,7 +188,8 @@ pub fn cmd_click(x: usize, width: usize, client: Option<&str>, line: i32, curren
 }
 
 pub fn cmd_click_close(x: usize, width: usize, client: Option<&str>, line: i32, current: &str) {
-    if line >= 1 {
+    let cfg = crate::config::resolved_for_session(current);
+    if crate::config::status_line_is_events(&cfg, line) {
         return;
     }
     let Some(target) = hit(x, width, current) else {
