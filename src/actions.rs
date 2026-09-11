@@ -124,7 +124,7 @@ pub fn load_snapshot() -> Vec<(String, String)> {
         .collect()
 }
 
-pub fn cmd_new(name: &str, client: Option<&str>, group: Option<&str>) -> (String, bool) {
+pub fn cmd_new(name: &str, client: Option<&str>, group: Option<&str>) -> Result<String, String> {
     let group = group
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -134,14 +134,14 @@ pub fn cmd_new(name: &str, client: Option<&str>, group: Option<&str>) -> (String
     if name.is_empty() {
         name = unique_name(Some(&group));
     }
-    let created = !tmux_ok(&["has-session", "-t", &format!("={name}")]);
-    if created {
-        tmux(&["new-session", "-d", "-s", &name]);
-        save_snapshot();
-        crate::groups::add_member(&group, &name);
+    if tmux_ok(&["has-session", "-t", &format!("={name}")]) {
+        return Err(format!("{name} already exists"));
     }
+    tmux(&["new-session", "-d", "-s", &name]);
+    save_snapshot();
+    crate::groups::add_member(&group, &name);
     switch_to(&name, client);
-    (name, created)
+    Ok(name)
 }
 
 /// Renames `old` to `new_name`. Returns an error message on failure, None on success.

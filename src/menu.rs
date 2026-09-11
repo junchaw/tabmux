@@ -5,7 +5,7 @@ use crate::groups::{
     close_session, group_of_session, members_for, rename_member, set_member_order, stamp_group_ids,
     CloseOutcome, DEFAULT_GROUP,
 };
-use crate::tmux::{launcher, tmux, unique_name};
+use crate::tmux::{launcher, tmux, tmux_ok, unique_name};
 
 pub fn popup_menu(client: Option<&str>) {
     let exe = launcher().display().to_string();
@@ -234,12 +234,78 @@ fn render_menu_table(left: &[(String, String)], right: &[(String, String)], cols
     }
 }
 
-fn prompt_new_session_name(group: &str) -> String {
+fn prompt_new_session_name(group: &str) -> Option<String> {
     let default = unique_name(Some(group));
-    prompt_text("new session", &format!("empty uses {default}"))
+    let hint = format!("empty uses {default}  ·  esc cancel");
+    let mut buf = String::new();
+    let mut error = String::new();
+    loop {
+        let (cols, rows) = term_size();
+        let box_w = 44.min(28.max(cols.saturating_sub(8)).max(hint.len() + 2).max(error.len() + 2));
+        let mut shown = buf.clone();
+        if shown.chars().count() > box_w.saturating_sub(9) {
+            shown = shown.chars().rev().take(box_w.saturating_sub(9)).collect::<String>();
+            shown = shown.chars().rev().collect();
+        }
+        let field = format!(" name: {shown}_");
+        let mut lines = vec![
+            format!("┌{}┐", "─".repeat(box_w)),
+            format!("│{:^width$}│", "new session", width = box_w),
+            format!("│{}│", " ".repeat(box_w)),
+            format!("│{:<width$}│", field.chars().take(box_w).collect::<String>(), width = box_w),
+            format!("│{:^width$}│", hint, width = box_w),
+        ];
+        if !error.is_empty() {
+            lines.push(format!(
+                "│{:^width$}│",
+                error.chars().take(box_w).collect::<String>(),
+                width = box_w
+            ));
+        }
+        lines.push(format!("└{}┘", "─".repeat(box_w)));
+        let r0 = 1.max((rows.saturating_sub(lines.len())) / 2 + 1);
+        let c0 = 1.max((cols.saturating_sub(box_w + 2)) / 2 + 1);
+        let mut out = String::from("\x1b[H\x1b[J");
+        for (i, line) in lines.iter().enumerate() {
+            let painted = if !error.is_empty() && i + 2 == lines.len() {
+                format!("\x1b[38;5;203m{line}\x1b[0m")
+            } else {
+                line.clone()
+            };
+            out.push_str(&format!("\x1b[{};{}H{painted}", r0 + i, c0));
+        }
+        let _ = io::stdout().write_all(out.as_bytes());
+        let _ = io::stdout().flush();
+        let Some(b) = read_raw() else {
+            continue;
+        };
+        match b {
+            b'\r' | b'\n' => {
+                let name = buf.trim();
+                if name.is_empty() {
+                    return Some(String::new());
+                }
+                if tmux_ok(&["has-session", "-t", &format!("={name}")]) {
+                    error = format!("{name} already exists");
+                    continue;
+                }
+                return Some(name.to_string());
+            }
+            0x7f | 0x08 => {
+                buf.pop();
+                error.clear();
+            }
+            0x1b | 0x03 | 0x04 => return None,
+            c if c.is_ascii_graphic() || c == b' ' => {
+                buf.push(c as char);
+                error.clear();
+            }
+            _ => {}
+        }
+    }
 }
 
-fn prompt_text(title: &str, hint: &str) -> String {
+fn prompt_text(title: &str, hint: &str) -> Option<String> {
     let mut buf = String::new();
     loop {
         let (cols, rows) = term_size();
@@ -270,11 +336,11 @@ fn prompt_text(title: &str, hint: &str) -> String {
             continue;
         };
         match b {
-            b'\r' | b'\n' => return buf.trim().to_string(),
+            b'\r' | b'\n' => return Some(buf.trim().to_string()),
             0x7f | 0x08 => {
                 buf.pop();
             }
-            0x1b | 0x03 | 0x04 => {}
+            0x1b | 0x03 | 0x04 => return None,
             c if c.is_ascii_graphic() || c == b' ' => buf.push(c as char),
             _ => {}
         }
@@ -501,7 +567,9 @@ fn pick_theme(current: &str) -> Option<String> {
             }
             Key::Enter => {
                 if idx + 1 == ids.len() {
-                    let path = prompt_text("theme file", "json or yaml path");
+                    let Some(path) = prompt_text("theme file", "json or yaml path  ·  esc cancel") else {
+                        continue;
+                    };
                     if path.is_empty() {
                         return None;
                     }
@@ -869,15 +937,13 @@ pub fn cmd_menu(client: Option<&str>) {
     match ch {
         'q' | '\r' | '\n' | '\u{1b}' => {}
         'n' => {
-            let (new_name, created) = cmd_new(&prompt_new_session_name(&group), client, Some(&group));
-            start_flash(
-                &if created {
-                    format!("created {new_name}")
-                } else {
-                    format!("switched to {new_name}")
-                },
-                client,
-            );
+            let Some(name) = prompt_new_session_name(&group) else {
+                return;
+            };
+            match cmd_new(&name, client, Some(&group)) {
+                Ok(new_name) => start_flash(&format!("created {new_name}"), client),
+                Err(e) => start_flash(&e, client),
+            }
         }
         'x' | 'X' => {
             let sess = if current.is_empty() {
@@ -906,7 +972,12 @@ pub fn cmd_menu(client: Option<&str>) {
             if sess.is_empty() {
                 start_flash("unknown action (r)", client);
             } else {
-                let new_name = prompt_text("rename session", &format!("empty keeps {sess}"));
+                let Some(new_name) = prompt_text(
+                    "rename session",
+                    &format!("empty keeps {sess}  ·  esc cancel"),
+                ) else {
+                    return;
+                };
                 stamp_group_ids(&group);
                 match cmd_rename(&sess, &new_name, client) {
                     Ok(()) if new_name.trim().is_empty() || new_name.trim() == sess => {}

@@ -209,11 +209,14 @@ fn main() {
             cmd_click_close(x, w, opt(rest.get(2)), line, current);
         }
         "new" => {
-            cmd_new(
+            if let Err(e) = cmd_new(
                 rest.first().map(|s| s.as_str()).unwrap_or(""),
                 opt(rest.get(1)),
                 None,
-            );
+            ) {
+                eprintln!("tabmux new: {e}");
+                std::process::exit(1);
+            }
         }
         "close" => {
             let Some(group) = opt(rest.first()) else {
