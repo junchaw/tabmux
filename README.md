@@ -58,6 +58,16 @@ tabmux status review     # any other name: cyan unless mapped
 Without a session argument this uses `$TMUX_PANE`. Extra names and colors go in
 `~/.config/tabmux/status-colors` (`name colour196` per line).
 
+After a status **changes**, tabmux runs executable hooks (fire-and-forget):
+
+```
+~/.config/tabmux/hooks/status          # every change
+~/.config/tabmux/hooks/status-<name>   # that state only (e.g. status-idle)
+```
+
+Env: `TABMUX_STATUS`, `TABMUX_PREV_STATUS`, `TABMUX_SESSION`. Unchanged repeats
+are skipped. Example: `contrib/hooks/status-idle` (Maily completed notify).
+
 To drive the dot from an agent automatically:
 
 - [pi](https://github.com/badlogic/pi-mono): `docs/pi.md` (template: `contrib/pi/tabmux.ts`)
