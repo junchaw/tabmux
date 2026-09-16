@@ -2,6 +2,7 @@ mod actions;
 mod bar;
 mod config;
 mod groups;
+mod hooks;
 mod menu;
 mod theme;
 mod tmux;

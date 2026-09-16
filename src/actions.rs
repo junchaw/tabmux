@@ -232,12 +232,17 @@ pub fn status_choices() -> Vec<String> {
 
 pub fn apply_status(state: &str, session: &str, client: Option<&str>) {
     let path = status_path(session);
+    let prev = std::fs::read_to_string(&path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     if state == "unset" {
         let _ = std::fs::remove_file(&path);
     } else {
         ensure_dir(&path);
         let _ = std::fs::write(&path, state);
     }
+    crate::hooks::run_status_hooks(state, prev.as_deref(), session);
     if let Some(c) = client.filter(|s| !s.is_empty()) {
         tmux(&["refresh-client", "-S", "-t", c]);
     } else {
