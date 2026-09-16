@@ -66,7 +66,7 @@ After a status **changes**, tabmux runs executable hooks (fire-and-forget):
 ```
 
 Env: `TABMUX_STATUS`, `TABMUX_PREV_STATUS`, `TABMUX_SESSION`. Unchanged repeats
-are skipped. Example: `contrib/hooks/status-idle` (Maily completed notify).
+are skipped. Example: `contrib/hooks/status-idle` (placeholder; appends to `/tmp/tabmux-hook.log`).
 
 To drive the dot from an agent automatically:
 

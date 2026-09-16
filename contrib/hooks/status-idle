@@ -1,43 +1,7 @@
-#!/usr/bin/env python3
-"""tabmux hook: notify Maily when a tab becomes idle (agent settled)."""
+#!/bin/sh
+# Placeholder/demo hook. Copy to ~/.config/tabmux/hooks/status-idle and chmod +x.
+# tabmux runs this when a tab's status changes to idle.
+# Replace the body with whatever you actually want (notify, log, etc.).
 
-from __future__ import annotations
-
-import os
-import subprocess
-import sys
-from pathlib import Path
-
-NOTIFY = Path.home() / ".agents/skills/notify-user/scripts/notify.py"
-
-
-def main() -> int:
-    if not NOTIFY.is_file():
-        return 0
-    session = (
-        os.environ.get("PI_SESSION_ID")
-        or os.environ.get("TABMUX_SESSION")
-        or ""
-    ).strip()
-    if not session:
-        return 0
-    subprocess.run(
-        [
-            sys.executable,
-            str(NOTIFY),
-            "--event",
-            "completed",
-            "--matter",
-            "Pi turn settled",
-            "--agent",
-            "pi",
-            "--session",
-            session,
-        ],
-        check=False,
-    )
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+exec >>/tmp/tabmux-hook.log 2>&1
+echo "$(date -Is) idle session=${TABMUX_SESSION-} prev=${TABMUX_PREV_STATUS-}"
