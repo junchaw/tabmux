@@ -4,4 +4,4 @@
 # Replace the body with whatever you actually want (notify, log, etc.).
 
 exec >>/tmp/tabmux-hook.log 2>&1
-echo "$(date -Is) idle session=${TABMUX_SESSION-} prev=${TABMUX_PREV_STATUS-}"
+echo "$(date -Is) tabmux tab became idle (session ${TABMUX_SESSION-unknown}, was ${TABMUX_PREV_STATUS-unknown})"
