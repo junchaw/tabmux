@@ -832,7 +832,7 @@ pub fn cmd_menu(client: Option<&str>) {
     switches.push(("h [".into(), "switch to the previous session".into()));
     switches.push(("l ]".into(), "switch to the next session".into()));
     switches.push(("p".into(), "switch to the last session you were on".into()));
-    switches.push((";".into(), "switch to the next idle session".into()));
+    switches.push(("; enter".into(), "switch to the next idle session".into()));
 
     let mut left: Vec<(String, String)> = first
         .iter()
@@ -867,7 +867,7 @@ pub fn cmd_menu(client: Option<&str>) {
 
     let ch = read_raw().map(|b| b as char).unwrap_or('\0');
     match ch {
-        'q' | '\r' | '\n' | '\u{1b}' => {}
+        'q' | '\u{1b}' => {}
         'n' => {
             let (new_name, created) = cmd_new(&prompt_new_session_name(&group), client, Some(&group));
             start_flash(
@@ -968,7 +968,7 @@ pub fn cmd_menu(client: Option<&str>) {
                 start_flash(&format!("switched to {to}"), client);
             }
         }
-        ';' => {
+        ';' | '\r' | '\n' => {
             match cmd_step_status(&current, "idle", client) {
                 Some(to) => start_flash(&format!("switched to {to}"), client),
                 None => start_flash("no idle session", client),

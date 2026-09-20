@@ -75,6 +75,7 @@ in the pane.
 ## Inside the app
 
 Press `Ctrl-b` for the command menu (`c` for bar/theme settings).
+`Ctrl-b` then `Enter` or `;` switches to the next idle session.
 
 ## Themes
 
