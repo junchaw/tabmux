@@ -21,12 +21,22 @@
   html, body { margin: 0; height: 100%; background: var(--pane); color: var(--msg-fg); font: 14px/1.3 ui-monospace, monospace; }
   body { display: flex; flex-direction: column; min-height: 100%; }
   .stack { display: flex; flex-direction: column; flex: none; }
+  .screen { position: relative; flex: 1; min-height: 0; background: #11151c; }
   .pane {
-    flex: 1; margin: 0; padding: 8px 12px; overflow: auto;
+    position: absolute; inset: 0; margin: 0; padding: 8px 12px; overflow: auto;
     white-space: pre; font: 13px/1.35 ui-monospace, monospace;
-    background: #11151c; color: #e5e9f0; outline: none; cursor: text;
+    color: #e5e9f0; pointer-events: none;
   }
-  .pane:focus { box-shadow: inset 0 0 0 1px #4c566a; }
+  .cursor {
+    position: absolute; display: none; width: 1ch; height: 1.35em; margin: 0;
+    background: #e5e9f0; mix-blend-mode: difference; pointer-events: none;
+  }
+  .catcher {
+    position: absolute; left: 12px; top: 8px; width: 24ch; height: 1.35em; margin: 0; padding: 0;
+    border: 0; resize: none; outline: none; overflow: hidden; background: transparent;
+    color: transparent; caret-color: transparent; white-space: nowrap; z-index: 2;
+    pointer-events: auto; font: 13px/1.35 ui-monospace, monospace;
+  }
   .events, .tabs { display: flex; min-height: 28px; user-select: none; }
   .events { background: var(--msg-bg); color: var(--msg-fg); align-items: stretch; }
   .hint {
@@ -71,7 +81,9 @@
 </head>
 <body>
 <div class="stack" id="top"></div>
-<pre class="pane" id="pane" tabindex="0"></pre>
+<div class="screen">
+<pre class="pane" id="pane"><span id="term"></span><span id="cursor" class="cursor"></span><textarea id="catcher" class="catcher" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea></pre>
+</div>
 <div class="stack" id="bottom"></div>
 <div class="overlay" id="overlay">
   <div class="card" id="card"></div>
@@ -177,12 +189,15 @@ function closeMenu() {
   mode = null;
   err = "";
   document.querySelector("#overlay").classList.remove("on");
+  const catcher = document.querySelector("#catcher");
+  if (catcher) catcher.focus();
 }
 function openMenu() {
   menuSession = current();
   mode = "menu";
   err = "";
   show(menuHtml());
+  document.querySelector("#catcher").blur();
 }
 async function api(path, body) {
   const res = await fetch(path, {
@@ -200,13 +215,6 @@ async function refresh() {
   state = await fetch("/api/state" + q).then(r => r.json());
   applyTheme(state.theme);
   place();
-  const pane = document.querySelector("#pane");
-  const text = state.pane || "";
-  const stick = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 48;
-  if (pane.textContent !== text) {
-    pane.textContent = text;
-    if (stick) pane.scrollTop = pane.scrollHeight;
-  }
 }
 function promptBox(title, hint, value, ok) {
   mode = "prompt";
@@ -349,6 +357,7 @@ document.body.addEventListener("click", async (e) => {
   const tab = e.target.closest(".tab[data-session]");
   if (!tab || mode) return;
   focus = tab.dataset.session;
+  watchSession(focus);
   try { await api("/api/switch", { session: tab.dataset.session }); }
   catch (ex) {}
   await refresh();
@@ -362,7 +371,7 @@ document.body.addEventListener("contextmenu", async (e) => {
 });
 document.addEventListener("keydown", async (e) => {
   const inField = e.target.closest && e.target.closest("input, textarea");
-  if (inField) {
+  if (inField && e.target.id !== "catcher") {
     if (e.key === "Escape") { e.preventDefault(); closeMenu(); refresh(); }
     return;
   }
@@ -371,15 +380,7 @@ document.addEventListener("keydown", async (e) => {
     if (!mode) openMenu();
     return;
   }
-  if (!mode) {
-    if (e.isComposing) return;
-    const key = tmuxKey(e);
-    if (!key) return;
-    e.preventDefault();
-    const body = key.literal ? { literal: key.literal } : { key };
-    enqueueKeys(async () => { try { await sendInput(body); } catch (ex) {} });
-    return;
-  }
+  if (e.target.id === "catcher") return;
   if (mode.type === "order") {
     e.preventDefault();
     if (e.key === "j" || e.key === "ArrowDown") await moveOrder(1);
@@ -427,11 +428,92 @@ function enqueueKeys(fn) {
   keyQueue = keyQueue.then(fn, fn);
   return keyQueue;
 }
+let tty;
+let measureCtx;
+function textWidth(s) {
+  if (!measureCtx) {
+    measureCtx = document.createElement("canvas").getContext("2d");
+    measureCtx.font = "13px ui-monospace, monospace";
+  }
+  return measureCtx.measureText(s).width;
+}
+function wideChar(ch) {
+  const c = ch.codePointAt(0);
+  return (c >= 0x1100 && c <= 0x115f) ||
+    (c >= 0x2e80 && c <= 0xa4cf && c !== 0x303f) ||
+    (c >= 0xac00 && c <= 0xd7a3) ||
+    (c >= 0xf900 && c <= 0xfaff) ||
+    (c >= 0xfe10 && c <= 0xfe19) ||
+    (c >= 0xfe30 && c <= 0xfe6f) ||
+    (c >= 0xff00 && c <= 0xff60) ||
+    (c >= 0xffe0 && c <= 0xffe6) ||
+    (c >= 0x1f300 && c <= 0x1f64f) ||
+    (c >= 0x20000 && c <= 0x3fffd);
+}
+function columnOffset(line, cells) {
+  let col = 0;
+  let px = 0;
+  for (const ch of line) {
+    const w = wideChar(ch) ? 2 : 1;
+    if (col + w > cells) break;
+    px += textWidth(ch);
+    col += w;
+    if (col >= cells) break;
+  }
+  return px;
+}
+function showPane(msg) {
+  const pane = document.querySelector("#pane");
+  const term = document.querySelector("#term");
+  const text = msg.text || "";
+  const stick = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 48;
+  if (term.textContent !== text) {
+    term.textContent = text;
+    if (stick) pane.scrollTop = pane.scrollHeight;
+  }
+  const cursor = document.querySelector("#cursor");
+  const x = msg.x || 0;
+  const y = msg.y || 0;
+  const line = text.split("\n")[y] || "";
+  const posLeft = `${12 + columnOffset(line, x)}px`;
+  const posTop = `calc(8px + ${y} * 1.35em)`;
+  cursor.style.width = `${Math.max(1, textWidth("0"))}px`;
+  cursor.style.left = posLeft;
+  cursor.style.top = posTop;
+  const catcher = document.querySelector("#catcher");
+  const composing = catcher.dataset.composing === "1";
+  cursor.style.display = composing ? "none" : "block";
+  if (!composing) {
+    catcher.style.left = posLeft;
+    catcher.style.top = posTop;
+  }
+}
+function connectTty() {
+  if (tty && (tty.readyState === 0 || tty.readyState === 1)) return;
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  tty = new WebSocket(proto + "//" + location.host + "/api/tty");
+  tty.onopen = () => {
+    const session = typingSession();
+    if (session) tty.send(JSON.stringify({ type: "watch", session }));
+  };
+  tty.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    if (msg.type === "pane") showPane(msg);
+  };
+  tty.onclose = () => setTimeout(connectTty, 800);
+}
+function watchSession(session) {
+  if (tty && tty.readyState === 1 && session) {
+    tty.send(JSON.stringify({ type: "watch", session }));
+  }
+}
 async function sendInput(body) {
   const session = typingSession();
   if (!session) throw new Error("no session");
-  await api("/api/keys", { session, ...body });
-  await refresh();
+  if (!tty || tty.readyState !== 1) throw new Error("tty disconnected");
+  if (body.literal != null) tty.send(JSON.stringify({ type: "literal", session, text: body.literal }));
+  else tty.send(JSON.stringify({ type: "key", session, key: body.key }));
 }
 function tmuxKey(e) {
   if (e.metaKey) return null;
@@ -450,20 +532,44 @@ function tmuxKey(e) {
   if (!e.ctrlKey && !e.altKey && e.key.length === 1) return { literal: e.key };
   return null;
 }
-paneEl.addEventListener("mousedown", () => paneEl.focus());
-paneEl.addEventListener("paste", async (e) => {
-  if (mode) return;
-  const text = e.clipboardData && e.clipboardData.getData("text");
-  if (!text) return;
+const catcher = document.querySelector("#catcher");
+function focusCatcher() {
+  if (!mode) catcher.focus();
+}
+catcher.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && (e.key === "b" || e.key === "B")) return;
+  if (mode || e.isComposing) return;
+  const key = tmuxKey(e);
+  if (!key || key.literal) return;
   e.preventDefault();
-  try { await sendInput({ literal: text }); } catch (ex) {}
+  enqueueKeys(async () => { try { await sendInput({ key }); } catch (ex) {} });
 });
-paneEl.addEventListener("compositionend", async (e) => {
-  if (mode || !e.data) return;
-  try { await sendInput({ literal: e.data }); } catch (ex) {}
+catcher.addEventListener("input", () => {
+  if (mode || catcher.dataset.composing === "1") return;
+  const text = catcher.value;
+  if (!text) return;
+  catcher.value = "";
+  enqueueKeys(async () => { try { await sendInput({ literal: text }); } catch (ex) {} });
 });
-setInterval(refresh, 400);
-paneEl.focus();
+document.querySelector(".screen").addEventListener("mousedown", (e) => {
+  if (e.target.id !== "catcher") catcher.focus();
+});
+catcher.addEventListener("compositionstart", () => {
+  catcher.dataset.composing = "1";
+  catcher.style.color = "#e5e9f0";
+  document.querySelector("#cursor").style.display = "none";
+});
+catcher.addEventListener("compositionend", () => {
+  catcher.dataset.composing = "";
+  catcher.style.color = "transparent";
+  const text = catcher.value;
+  catcher.value = "";
+  if (!text || mode) return;
+  enqueueKeys(async () => { try { await sendInput({ literal: text }); } catch (ex) {} });
+});
+setInterval(refresh, 1000);
+connectTty();
+focusCatcher();
 </script>
 </body>
 </html>

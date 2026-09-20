@@ -1,5 +1,5 @@
-use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::io::{ErrorKind, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -33,7 +33,19 @@ pub fn serve(args: &[String]) {
     for conn in listener.incoming() {
         let Ok(mut stream) = conn else { continue };
         let _ = stream.set_read_timeout(Some(Duration::from_secs(8)));
-        if let Some((method, path, body)) = read_request(&mut stream) {
+        if let Some((method, path, body, head)) = read_request(&mut stream) {
+            let (only, query) = path.split_once('?').unwrap_or((path.as_str(), ""));
+            if method == "GET" && only == "/api/tty" {
+                if let Some(key) = header_value(&head, "sec-websocket-key") {
+                    let focus = query_param(query, "focus");
+                    std::thread::spawn(move || {
+                        if let Err(e) = tty_connection(stream, &key, focus) {
+                            eprintln!("tabmux tty: {e}");
+                        }
+                    });
+                    continue;
+                }
+            }
             let (status, ctype, payload) = route(&method, &path, &body);
             let head = format!(
                 "HTTP/1.1 {status}\r\ncontent-type: {ctype}\r\ncontent-length: {}\r\nconnection: close\r\ncache-control: no-store\r\n\r\n",
@@ -231,12 +243,38 @@ fn session_target(session: &str) -> Result<String, String> {
         .ok_or_else(|| format!("no session {session}"))
 }
 
-fn capture_pane(session: &str) -> String {
+struct PaneShot {
+    text: String,
+    x: u32,
+    y: u32,
+    cols: u32,
+    rows: u32,
+}
+
+fn capture_pane(session: &str) -> PaneShot {
     let Ok(target) = session_target(session) else {
-        return String::new();
+        return PaneShot { text: String::new(), x: 0, y: 0, cols: 0, rows: 0 };
     };
-    let out = tmux(&["capture-pane", "-p", "-J", "-t", &target, "-S", "-120"]);
-    String::from_utf8_lossy(&out.stdout).into_owned()
+    let meta = tmux_stdout(&[
+        "display-message",
+        "-p",
+        "-t",
+        &target,
+        "#{cursor_x} #{cursor_y} #{pane_width} #{pane_height}",
+    ]);
+    let mut nums = meta.split_whitespace().filter_map(|s| s.parse::<u32>().ok());
+    let x = nums.next().unwrap_or(0);
+    let y = nums.next().unwrap_or(0);
+    let cols = nums.next().unwrap_or(0);
+    let rows = nums.next().unwrap_or(0);
+    let out = tmux(&["capture-pane", "-p", "-t", &target]);
+    PaneShot {
+        text: String::from_utf8_lossy(&out.stdout).into_owned(),
+        x,
+        y,
+        cols,
+        rows,
+    }
 }
 
 fn send_input(v: &Value) -> (u16, &'static str, Vec<u8>) {
@@ -376,7 +414,7 @@ fn snapshot(focus: &str) -> Value {
             .unwrap_or("")
             .to_string()
     };
-    let pane = capture_pane(&pane_session);
+    let pane = capture_pane(&pane_session).text;
     json!({
         "group": group,
         "current": current,
@@ -480,7 +518,17 @@ fn json_err(code: u16, msg: &str) -> (u16, &'static str, Vec<u8>) {
     )
 }
 
-fn read_request(stream: &mut impl Read) -> Option<(String, String, Vec<u8>)> {
+fn header_value(head: &str, name: &str) -> Option<String> {
+    for line in head.lines() {
+        let Some((k, v)) = line.split_once(':') else { continue };
+        if k.eq_ignore_ascii_case(name) {
+            return Some(v.trim().to_string());
+        }
+    }
+    None
+}
+
+fn read_request(stream: &mut impl Read) -> Option<(String, String, Vec<u8>, String)> {
     let mut buf = Vec::new();
     let mut tmp = [0u8; 4096];
     let header_end = loop {
@@ -518,5 +566,271 @@ fn read_request(stream: &mut impl Read) -> Option<(String, String, Vec<u8>)> {
         body.extend_from_slice(&tmp[..n]);
     }
     body.truncate(len);
-    Some((method, path, body))
+    Some((method, path, body, head))
+}
+
+fn tty_connection(mut stream: TcpStream, key: &str, mut session: String) -> std::io::Result<()> {
+    let accept = b64(&sha1(
+        format!("{key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11").as_bytes(),
+    ));
+    let handshake = format!(
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+    );
+    stream.write_all(handshake.as_bytes())?;
+    stream.set_read_timeout(Some(Duration::from_millis(60)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+    let mut last = String::new();
+    loop {
+        if session.is_empty() {
+            session = tmux_stdout(&["list-clients", "-F", "#{session_name}"])
+                .lines()
+                .find_map(|l| {
+                    let s = l.trim();
+                    if s.is_empty() { None } else { Some(s.to_string()) }
+                })
+                .unwrap_or_default();
+        }
+        match read_ws_frame(&mut stream) {
+            Ok(Some(payload)) => {
+                if apply_tty_message(&payload, &mut session) {
+                    last.clear();
+                }
+            }
+            Ok(None) => {}
+            Err(_) => break,
+        }
+        if session.is_empty() {
+            continue;
+        }
+        let shot = capture_pane(&session);
+        let sig = format!("{}\n{}\n{}", shot.x, shot.y, shot.text);
+        if sig != last {
+            last = sig;
+            let msg = json!({
+                "type": "pane",
+                "session": session,
+                "text": shot.text,
+                "x": shot.x,
+                "y": shot.y,
+                "cols": shot.cols,
+                "rows": shot.rows
+            }).to_string();
+            if write_ws_text(&mut stream, &msg).is_err() {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    Ok(())
+}
+
+fn apply_tty_message(payload: &[u8], session: &mut String) -> bool {
+    let v = parse_json(payload);
+    let kind = field(&v, "type");
+    let named = field(&v, "session");
+    if !named.is_empty() {
+        *session = named;
+    }
+    match kind.as_str() {
+        "watch" => true,
+        "literal" => {
+            let text = v.get("text").and_then(|x| x.as_str()).unwrap_or("");
+            if !text.is_empty() {
+                if let Ok(target) = session_target(session) {
+                    let _ = tmux(&["send-keys", "-t", &target, "-l", "--", text]);
+                }
+            }
+            false
+        }
+        "key" => {
+            let key = field(&v, "key");
+            if allowed_key(&key) {
+                if let Ok(target) = session_target(session) {
+                    let _ = tmux(&["send-keys", "-t", &target, &key]);
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+fn read_ws_frame(stream: &mut TcpStream) -> std::io::Result<Option<Vec<u8>>> {
+    let mut hdr = [0u8; 2];
+    if let Err(e) = read_full(stream, &mut hdr, true) {
+        return if e.kind() == ErrorKind::TimedOut || e.kind() == ErrorKind::WouldBlock {
+            Ok(None)
+        } else {
+            Err(e)
+        };
+    }
+    let opcode = hdr[0] & 0x0f;
+    let masked = hdr[1] & 0x80 != 0;
+    let mut len = (hdr[1] & 0x7f) as u64;
+    if len == 126 {
+        let mut ext = [0u8; 2];
+        read_full(stream, &mut ext, false)?;
+        len = u16::from_be_bytes(ext) as u64;
+    } else if len == 127 {
+        let mut ext = [0u8; 8];
+        read_full(stream, &mut ext, false)?;
+        len = u64::from_be_bytes(ext);
+    }
+    if len > 1_000_000 {
+        return Err(std::io::Error::new(ErrorKind::InvalidData, "frame too large"));
+    }
+    let mut mask = [0u8; 4];
+    if masked {
+        read_full(stream, &mut mask, false)?;
+    }
+    let mut payload = vec![0u8; len as usize];
+    if len > 0 {
+        read_full(stream, &mut payload, false)?;
+    }
+    if masked {
+        for (i, b) in payload.iter_mut().enumerate() {
+            *b ^= mask[i % 4];
+        }
+    }
+    match opcode {
+        0x8 => Err(std::io::Error::new(ErrorKind::ConnectionAborted, "close")),
+        0x9 => {
+            write_ws_frame(stream, 0xA, &payload)?;
+            Ok(None)
+        }
+        0x1 | 0x2 => Ok(Some(payload)),
+        _ => Ok(None),
+    }
+}
+
+fn read_full(stream: &mut TcpStream, buf: &mut [u8], first: bool) -> std::io::Result<()> {
+    let mut got = 0;
+    while got < buf.len() {
+        match stream.read(&mut buf[got..]) {
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    ErrorKind::UnexpectedEof,
+                    "closed",
+                ))
+            }
+            Ok(n) => got += n,
+            Err(e)
+                if first
+                    && got == 0
+                    && (e.kind() == ErrorKind::TimedOut || e.kind() == ErrorKind::WouldBlock) =>
+            {
+                return Err(e)
+            }
+            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+fn write_ws_text(stream: &mut TcpStream, text: &str) -> std::io::Result<()> {
+    write_ws_frame(stream, 0x1, text.as_bytes())
+}
+
+fn write_ws_frame(stream: &mut TcpStream, opcode: u8, payload: &[u8]) -> std::io::Result<()> {
+    let mut hdr = vec![0x80 | opcode];
+    let n = payload.len();
+    if n < 126 {
+        hdr.push(n as u8);
+    } else if n <= u16::MAX as usize {
+        hdr.push(126);
+        hdr.extend_from_slice(&(n as u16).to_be_bytes());
+    } else {
+        hdr.push(127);
+        hdr.extend_from_slice(&(n as u64).to_be_bytes());
+    }
+    stream.write_all(&hdr)?;
+    stream.write_all(payload)?;
+    stream.flush()?;
+    Ok(())
+}
+
+fn sha1(message: &[u8]) -> [u8; 20] {
+    let mut data = message.to_vec();
+    let bits = (message.len() as u64).wrapping_mul(8);
+    data.push(0x80);
+    while data.len() % 64 != 56 {
+        data.push(0);
+    }
+    data.extend_from_slice(&bits.to_be_bytes());
+    let mut h = [
+        0x67452301u32,
+        0xEFCDAB89,
+        0x98BADCFE,
+        0x10325476,
+        0xC3D2E1F0,
+    ];
+    for chunk in data.chunks(64) {
+        let mut w = [0u32; 80];
+        for i in 0..16 {
+            w[i] = u32::from_be_bytes(chunk[i * 4..i * 4 + 4].try_into().unwrap());
+        }
+        for i in 16..80 {
+            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
+        }
+        let (mut a, mut b, mut c, mut d, mut e) = (h[0], h[1], h[2], h[3], h[4]);
+        for i in 0..80 {
+            let (f, k) = match i {
+                0..=19 => ((b & c) | (!b & d), 0x5A827999),
+                20..=39 => (b ^ c ^ d, 0x6ED9EBA1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1BBCDC),
+                _ => (b ^ c ^ d, 0xCA62C1D6),
+            };
+            let temp = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(w[i]);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = temp;
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+    }
+    let mut out = [0u8; 20];
+    for (i, v) in h.iter().enumerate() {
+        out[i * 4..i * 4 + 4].copy_from_slice(&v.to_be_bytes());
+    }
+    out
+}
+
+fn b64(data: &[u8]) -> String {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    let mut i = 0;
+    while i + 3 <= data.len() {
+        let n = ((data[i] as u32) << 16) | ((data[i + 1] as u32) << 8) | data[i + 2] as u32;
+        out.push(T[((n >> 18) & 63) as usize] as char);
+        out.push(T[((n >> 12) & 63) as usize] as char);
+        out.push(T[((n >> 6) & 63) as usize] as char);
+        out.push(T[(n & 63) as usize] as char);
+        i += 3;
+    }
+    if i < data.len() {
+        let mut n = (data[i] as u32) << 16;
+        out.push(T[((n >> 18) & 63) as usize] as char);
+        if i + 1 < data.len() {
+            n |= (data[i + 1] as u32) << 8;
+            out.push(T[((n >> 12) & 63) as usize] as char);
+            out.push(T[((n >> 6) & 63) as usize] as char);
+            out.push('=');
+        } else {
+            out.push(T[((n >> 12) & 63) as usize] as char);
+            out.push('=');
+            out.push('=');
+        }
+    }
+    out
 }
