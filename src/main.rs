@@ -164,6 +164,7 @@ Group sessions (each group is its own independent set of tabs):
   tabmux config reset  clear global bar settings (getting started on next attach)
 
 Inside the app: Ctrl-b for the command menu.
+Ctrl-b then Enter or ; switches to the next idle session.
 "
     );
 }
