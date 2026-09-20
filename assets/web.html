@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tabmux</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --active-bg: #5e81ac;
+    --active-fg: #eceff4;
+    --inactive-bg: #3b4252;
+    --inactive-fg: #d8dee9;
+    --hint-bg: #d08770;
+    --hint-fg: #2e3440;
+    --msg-bg: #2e3440;
+    --msg-fg: #d8dee9;
+    --pane: #1c1f26;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--pane); color: var(--msg-fg); font: 14px/1.3 ui-monospace, monospace; }
+  body { display: flex; flex-direction: column; min-height: 100%; }
+  .stack { display: flex; flex-direction: column; flex: none; }
+  .pane {
+    flex: 1; margin: 0; padding: 8px 12px; overflow: auto;
+    white-space: pre; font: 13px/1.35 ui-monospace, monospace;
+    background: #11151c; color: #e5e9f0; outline: none; cursor: text;
+  }
+  .pane:focus { box-shadow: inset 0 0 0 1px #4c566a; }
+  .events, .tabs { display: flex; min-height: 28px; user-select: none; }
+  .events { background: var(--msg-bg); color: var(--msg-fg); align-items: stretch; }
+  .hint {
+    background: var(--hint-bg); color: var(--hint-fg); font-weight: 700;
+    padding: 4px 10px; white-space: nowrap;
+  }
+  .ticker {
+    flex: 1; display: flex; align-items: center; justify-content: flex-end;
+    padding: 0 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  }
+  .tabs { width: 100%; }
+  .tab {
+    flex: 1; min-width: 0; border: 0; margin: 0; padding: 4px 6px;
+    background: var(--inactive-bg); color: var(--inactive-fg);
+    font: inherit; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .tab.here { background: var(--active-bg); color: var(--active-fg); font-weight: 700; }
+  .dot { margin-right: 4px; }
+  .overlay {
+    position: fixed; inset: 0; background: rgba(12, 14, 18, 0.72);
+    display: none; align-items: center; justify-content: center; padding: 24px;
+  }
+  .overlay.on { display: flex; }
+  .card {
+    background: #242933; color: #e5e9f0; min-width: min(640px, 100%);
+    border: 1px solid #4c566a; padding: 16px 18px 12px;
+  }
+  .card h2 { margin: 0 0 12px; text-align: center; color: #d08770; font-size: 16px; }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { border: 1px solid #4c566a; padding: 4px 8px; text-align: left; font-weight: 400; }
+  th { color: #9aa3b2; }
+  td.key { font-weight: 700; white-space: nowrap; }
+  .foot { margin: 10px 0 0; text-align: center; color: #9aa3b2; }
+  .prompt { display: flex; gap: 8px; margin-top: 8px; }
+  input, button.plain {
+    font: inherit; color: inherit; background: #3b4252; border: 1px solid #4c566a; padding: 6px 8px;
+  }
+  .choices button { display: block; width: 100%; text-align: left; margin: 4px 0; cursor: pointer; }
+  .choices button.sel { background: var(--active-bg); color: var(--active-fg); }
+  .err { color: #bf616a; min-height: 1.2em; margin: 8px 0 0; text-align: center; }
+</style>
+</head>
+<body>
+<div class="stack" id="top"></div>
+<pre class="pane" id="pane" tabindex="0"></pre>
+<div class="stack" id="bottom"></div>
+<div class="overlay" id="overlay">
+  <div class="card" id="card"></div>
+</div>
+<script>
+let state = null;
+let mode = null;
+let focus = "";
+let menuSession = "";
+let order = [];
+let orderAt = 0;
+let pick = 0;
+let err = "";
+
+const MENU = [
+  ["q", "close this menu", "n", "create a new session"],
+  ["c", "configs", "d", "detach (tabmux keeps running)"],
+  ["", "", "", ""],
+  ["x", "close the current session", "r", "rename the current session"],
+  ["m", "reorder the current session", "s", "set status dot"],
+];
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function displayName(name) {
+  const i = name.lastIndexOf("-claude");
+  if (i >= 0 && /^\d*$/.test(name.slice(i + 7))) return name.slice(0, i);
+  return name;
+}
+function applyTheme(t) {
+  if (!t) return;
+  const r = document.documentElement.style;
+  r.setProperty("--active-bg", t.activeBg);
+  r.setProperty("--active-fg", t.activeFg);
+  r.setProperty("--inactive-bg", t.inactiveBg);
+  r.setProperty("--inactive-fg", t.inactiveFg);
+  r.setProperty("--hint-bg", t.hintBg);
+  r.setProperty("--hint-fg", t.hintFg);
+  r.setProperty("--msg-bg", t.msgBg);
+  r.setProperty("--msg-fg", t.msgFg);
+}
+function current() {
+  return (state?.sessions || []).find(s => s.attached)?.name || state?.current || state?.sessions?.[0]?.name || "";
+}
+function eventsHtml() {
+  const msgs = state?.messages || [];
+  const text = msgs.slice(-8).map(m => `${m.age} ${m.text}`).join("  |  ");
+  const click = state?.layout?.events === state?.layout?.tabs ? " data-open-menu=1" : "";
+  return `<div class="events"${click}><div class="hint">Try Ctrl+B</div><div class="ticker">${esc(text)}</div></div>`;
+}
+function tabsHtml() {
+  const sessions = state?.sessions || [];
+  if (!sessions.length) return `<div class="tabs"><button class="tab"> </button></div>`;
+  return `<div class="tabs">${sessions.map(s => {
+    const dot = s.color ? `<span class="dot" style="color:${esc(s.color)}">●</span>` : "";
+    return `<button class="tab${s.attached ? " here" : ""}" data-session="${esc(s.name)}">${dot}${esc(displayName(s.name))} (${s.index})</button>`;
+  }).join("")}</div>`;
+}
+function place() {
+  const ev = state?.layout?.events || "top";
+  const tabs = state?.layout?.tabs || "bottom";
+  const top = [];
+  const bottom = [];
+  const put = (side, html) => (side === "top" ? top : bottom).push(html);
+  if (ev === tabs) {
+    if (ev === "top") { top.push(eventsHtml(), tabsHtml()); }
+    else { bottom.push(tabsHtml(), eventsHtml()); }
+  } else {
+    put(ev, eventsHtml());
+    put(tabs, tabsHtml());
+  }
+  document.querySelector("#top").innerHTML = top.join("");
+  document.querySelector("#bottom").innerHTML = bottom.join("");
+}
+function switches() {
+  return (state?.sessions || []).slice(0, 9).map(s => [
+    String(s.index),
+    `switch to session ${s.index}: ${s.name}${s.attached ? " (current)" : ""}`,
+  ]).concat([
+    ["h [", "switch to the previous session"],
+    ["l ]", "switch to the next session"],
+    ["p", "switch to the last session you were on"],
+    ["; enter", "switch to the next idle session"],
+  ]);
+}
+function menuHtml() {
+  const right = switches();
+  const rows = Math.max(MENU.length, right.length);
+  let body = "";
+  for (let i = 0; i < rows; i++) {
+    const l = MENU[i] || ["", ""];
+    const r = right[i] || ["", ""];
+    body += `<tr><td class="key">${esc(l[0])}</td><td>${esc(l[1])}</td><td class="key">${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`;
+  }
+  return `<h2>TabMux</h2><table><tr><th>key</th><th>action</th><th>key</th><th>action</th></tr>${body}</table><p class="foot">press a key</p><div class="err">${esc(err)}</div>`;
+}
+function show(html) {
+  document.querySelector("#card").innerHTML = html;
+  document.querySelector("#overlay").classList.add("on");
+}
+function closeMenu() {
+  mode = null;
+  err = "";
+  document.querySelector("#overlay").classList.remove("on");
+}
+function openMenu() {
+  menuSession = current();
+  mode = "menu";
+  err = "";
+  show(menuHtml());
+}
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+async function refresh() {
+  if (mode) return;
+  const q = focus ? "?focus=" + encodeURIComponent(focus) : "";
+  state = await fetch("/api/state" + q).then(r => r.json());
+  applyTheme(state.theme);
+  place();
+  const pane = document.querySelector("#pane");
+  const text = state.pane || "";
+  const stick = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 48;
+  if (pane.textContent !== text) {
+    pane.textContent = text;
+    if (stick) pane.scrollTop = pane.scrollHeight;
+  }
+}
+function promptBox(title, hint, value, ok) {
+  mode = "prompt";
+  show(`<h2>${esc(title)}</h2><p class="foot">${esc(hint)}</p><form class="prompt" id="ask"><input id="ask-in" value="${esc(value)}" autocomplete="off"><button>ok</button></form><div class="err">${esc(err)}</div>`);
+  const input = document.querySelector("#ask-in");
+  input.focus();
+  input.select();
+  document.querySelector("#ask").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await ok(input.value); closeMenu(); await refresh(); }
+    catch (ex) { err = ex.message; promptBox(title, hint, input.value, ok); }
+  };
+}
+function choiceBox(title, items, selected, ok, shortcuts) {
+  mode = "choice";
+  pick = Math.max(0, selected);
+  const buttons = items.map((item, i) => {
+    const key = shortcuts?.[item] || "";
+    const label = key ? `${item}    ${key}` : item;
+    return `<button type="button" data-i="${i}" class="${i === pick ? "sel" : ""}">${esc(label)}</button>`;
+  }).join("");
+  const foot = shortcuts
+    ? "j/k or arrows  select · enter  set · u/i/a/b · esc  cancel"
+    : "j/k or arrows · enter confirm · esc cancel";
+  show(`<h2>${esc(title)}</h2><div class="choices" id="choices">${buttons}</div><p class="foot">${foot}</p><div class="err">${esc(err)}</div>`);
+  document.querySelector("#choices").onclick = async (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    try { await ok(items[Number(b.dataset.i)], Number(b.dataset.i)); }
+    catch (ex) { err = ex.message; choiceBox(title, items, pick, ok, shortcuts); }
+  };
+  mode = { type: "choice", items, ok, shortcuts: shortcuts || null };
+}
+async function runKey(ch) {
+  const session = menuSession || current();
+  const group = state?.group || "";
+  if (ch === "q" || ch === "Escape") { closeMenu(); return; }
+  if (ch === ";" || ch === "Enter") {
+    await api("/api/next-idle", { session });
+    closeMenu(); return;
+  }
+  if (ch === "n") {
+    promptBox("new session", "empty uses the next free name · esc cancel", "", (name) => api("/api/new", { group, name }));
+    return;
+  }
+  if (ch === "x" || ch === "X") { await api("/api/close", { session }); closeMenu(); return; }
+  if (ch === "r") {
+    promptBox("rename session", `empty keeps ${session} · esc cancel`, session, (name) => api("/api/rename", { session, name }));
+    return;
+  }
+  if (ch === "d") { await api("/api/detach"); closeMenu(); return; }
+  if (ch === "s") {
+    const items = state?.statuses || ["unset", "idle", "attention", "busy"];
+    const cur = (state?.sessions || []).find(s => s.name === session)?.status || "unset";
+    choiceBox(`status  ${session || "(none)"}`, items, Math.max(0, items.indexOf(cur)), async (item) => {
+      if (!session) throw new Error("no session");
+      await api("/api/status", { session, state: item });
+      closeMenu();
+      await refresh();
+    }, { unset: "u", idle: "i", attention: "a", busy: "b" });
+    return;
+  }
+  if (ch === "m") {
+    order = (state?.sessions || []).map(s => s.name);
+    orderAt = Math.max(0, order.indexOf(session));
+    drawOrder();
+    return;
+  }
+  if (ch === "c") { settingsScope(); return; }
+  if (ch >= "1" && ch <= "9") {
+    const s = (state?.sessions || [])[Number(ch) - 1];
+    if (!s) { err = `unknown action (${ch})`; show(menuHtml()); return; }
+    await api("/api/switch", { session: s.name });
+    closeMenu(); return;
+  }
+  if (ch === "h" || ch === "[") { await api("/api/step", { session, delta: -1 }); closeMenu(); return; }
+  if (ch === "l" || ch === "]") { await api("/api/step", { session, delta: 1 }); closeMenu(); return; }
+  if (ch === "p") { await api("/api/last", { session }); closeMenu(); return; }
+  err = `unknown action (${ch})`;
+  show(menuHtml());
+}
+function drawOrder() {
+  mode = { type: "order" };
+  const rows = order.map((name, i) => `<div class="${i === orderAt ? "tab here" : "tab"}">${i === orderAt ? "▸" : " "} ${i + 1}  ${esc(name)}</div>`).join("");
+  show(`<h2>reorder</h2><div class="choices">${rows}</div><p class="foot">j/k or arrows move · enter confirm · esc cancel</p>`);
+}
+async function moveOrder(dir) {
+  const j = orderAt + dir;
+  if (j < 0 || j >= order.length) return;
+  [order[orderAt], order[j]] = [order[j], order[orderAt]];
+  orderAt = j;
+  await api("/api/order", { group: state.group, names: order });
+  drawOrder();
+}
+function settingsScope() {
+  choiceBox("configure", ["global default", "current group only"], 0, async (_item, i) => {
+    const global = i === 0;
+    const base = state.layout;
+    choiceBox("which setting?", ["theme", "Ctrl+B / events bar", "session tabs"], 0, async (_w, w) => {
+      if (w === 0) {
+        const themes = state.themes || [];
+        const at = Math.max(0, themes.indexOf(state.themeId));
+        choiceBox("theme", themes, at, async (theme) => {
+          await commitLayout(global, { theme });
+        });
+      } else {
+        const key = w === 1 ? "events" : "tabs";
+        const title = w === 1 ? "Ctrl+B / events bar position" : "session tabs position";
+        const cur = base[key] === "bottom" ? 1 : 0;
+        choiceBox(title, ["top", "bottom"], cur, async (pos) => {
+          await commitLayout(global, { [key]: pos });
+        });
+      }
+    });
+  });
+}
+async function commitLayout(global, patch) {
+  const body = {
+    scope: global ? "global" : "group",
+    group: state.group,
+    events: state.layout.events,
+    tabs: state.layout.tabs,
+    ...patch,
+  };
+  if (global && state.override) {
+    choiceBox("there is override for this group, remove reset?", ["Yes", "No"], 1, async (_a, i) => {
+      body.clearOverride = i === 0;
+      await api("/api/layout", body);
+      closeMenu();
+      await refresh();
+    });
+    return;
+  }
+  await api("/api/layout", body);
+  closeMenu();
+  await refresh();
+}
+document.body.addEventListener("click", async (e) => {
+  if (e.target.closest("[data-open-menu]")) { openMenu(); return; }
+  const tab = e.target.closest(".tab[data-session]");
+  if (!tab || mode) return;
+  focus = tab.dataset.session;
+  try { await api("/api/switch", { session: tab.dataset.session }); }
+  catch (ex) {}
+  await refresh();
+});
+document.body.addEventListener("contextmenu", async (e) => {
+  const tab = e.target.closest(".tab[data-session]");
+  if (!tab) return;
+  e.preventDefault();
+  try { await api("/api/close", { session: tab.dataset.session }); await refresh(); }
+  catch (ex) {}
+});
+document.addEventListener("keydown", async (e) => {
+  const inField = e.target.closest && e.target.closest("input, textarea");
+  if (inField) {
+    if (e.key === "Escape") { e.preventDefault(); closeMenu(); refresh(); }
+    return;
+  }
+  if (e.ctrlKey && (e.key === "b" || e.key === "B")) {
+    e.preventDefault();
+    if (!mode) openMenu();
+    return;
+  }
+  if (!mode) {
+    if (e.isComposing) return;
+    const key = tmuxKey(e);
+    if (!key) return;
+    e.preventDefault();
+    const body = key.literal ? { literal: key.literal } : { key };
+    enqueueKeys(async () => { try { await sendInput(body); } catch (ex) {} });
+    return;
+  }
+  if (mode.type === "order") {
+    e.preventDefault();
+    if (e.key === "j" || e.key === "ArrowDown") await moveOrder(1);
+    else if (e.key === "k" || e.key === "ArrowUp") await moveOrder(-1);
+    else if (e.key === "Enter") { closeMenu(); await refresh(); }
+    else if (e.key === "Escape" || e.key === "q") { closeMenu(); await refresh(); }
+    return;
+  }
+  if (mode.type === "choice") {
+    e.preventDefault();
+    const n = mode.items.length;
+    if (e.key === "j" || e.key === "ArrowDown") pick = Math.min(n - 1, pick + 1);
+    else if (e.key === "k" || e.key === "ArrowUp") pick = Math.max(0, pick - 1);
+    else if (e.key === "Enter") { try { await mode.ok(mode.items[pick], pick); } catch (ex) { err = ex.message; } return; }
+    else if (e.key === "Escape" || e.key === "q") { closeMenu(); return; }
+    else if (mode.shortcuts && e.key.length === 1) {
+      const name = Object.keys(mode.shortcuts).find(n => mode.shortcuts[n] === e.key.toLowerCase());
+      if (name && mode.items.includes(name)) {
+        try { await mode.ok(name, mode.items.indexOf(name)); }
+        catch (ex) {
+          err = ex.message;
+          choiceBox(document.querySelector("#card h2").textContent, mode.items, mode.items.indexOf(name), mode.ok, mode.shortcuts);
+        }
+      }
+      return;
+    }
+    else return;
+    choiceBox(document.querySelector("#card h2").textContent, mode.items, pick, mode.ok, mode.shortcuts);
+    return;
+  }
+  if (mode !== "menu") return;
+  e.preventDefault();
+  const ch = e.key === "Enter" ? "Enter" : e.key.length === 1 ? e.key : e.key === "Escape" ? "Escape" : "";
+  if (!ch) return;
+  try { await runKey(ch); if (!mode) await refresh(); }
+  catch (ex) { err = ex.message; show(menuHtml()); }
+});
+refresh();
+const paneEl = document.querySelector("#pane");
+function typingSession() {
+  return focus || state?.paneSession || state?.current || "";
+}
+let keyQueue = Promise.resolve();
+function enqueueKeys(fn) {
+  keyQueue = keyQueue.then(fn, fn);
+  return keyQueue;
+}
+async function sendInput(body) {
+  const session = typingSession();
+  if (!session) throw new Error("no session");
+  await api("/api/keys", { session, ...body });
+  await refresh();
+}
+function tmuxKey(e) {
+  if (e.metaKey) return null;
+  if (e.ctrlKey && e.key.length === 1 && /[a-zA-Z]/.test(e.key)) {
+    if (e.key.toLowerCase() === "b") return null;
+    return "C-" + e.key.toLowerCase();
+  }
+  if (e.altKey && e.key.length === 1 && !e.ctrlKey) return "M-" + e.key;
+  const named = {
+    Enter: "Enter", Backspace: "BSpace", Tab: "Tab", Escape: "Escape",
+    ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
+    Delete: "DC", Home: "Home", End: "End", PageUp: "PPage", PageDown: "NPage",
+    " ": "Space",
+  };
+  if (named[e.key]) return named[e.key];
+  if (!e.ctrlKey && !e.altKey && e.key.length === 1) return { literal: e.key };
+  return null;
+}
+paneEl.addEventListener("mousedown", () => paneEl.focus());
+paneEl.addEventListener("paste", async (e) => {
+  if (mode) return;
+  const text = e.clipboardData && e.clipboardData.getData("text");
+  if (!text) return;
+  e.preventDefault();
+  try { await sendInput({ literal: text }); } catch (ex) {}
+});
+paneEl.addEventListener("compositionend", async (e) => {
+  if (mode || !e.data) return;
+  try { await sendInput({ literal: e.data }); } catch (ex) {}
+});
+setInterval(refresh, 400);
+paneEl.focus();
+</script>
+</body>
+</html>

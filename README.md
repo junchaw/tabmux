@@ -86,6 +86,16 @@ in the pane.
 
 Press `Ctrl-b` for the command menu (`c` for bar/theme settings).
 
+## Web
+
+```sh
+tabmux web                 # http://127.0.0.1:8791
+tabmux web 0.0.0.0 8791    # listen on all interfaces
+```
+
+The page uses the same bars, theme, and Ctrl-b menu as the terminal. Click a
+tab to switch, type in the pane to send keys to that tmux session.
+
 ## Themes
 
 Built-in: `nord`, `catppuccin-mocha`, `tokyonight`, `gruvbox-dark`, `dracula`,

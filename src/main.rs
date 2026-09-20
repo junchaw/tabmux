@@ -6,6 +6,7 @@ mod hooks;
 mod menu;
 mod theme;
 mod tmux;
+mod web;
 
 use std::os::unix::process::CommandExt;
 use std::process::Command;
@@ -164,6 +165,8 @@ Group sessions (each group is its own independent set of tabs):
   tabmux config reset  clear global bar settings (getting started on next attach)
 
 Inside the app: Ctrl-b for the command menu.
+  tabmux web [host] [port]
+                      browser UI (default 127.0.0.1:8791)
 "
     );
 }
@@ -270,6 +273,7 @@ fn main() {
             cmd_status(state, opt(rest.get(1)), None);
         }
         "save" => save_snapshot(),
+        "web" => web::serve(rest),
         _ => {
             usage();
             std::process::exit(2);
