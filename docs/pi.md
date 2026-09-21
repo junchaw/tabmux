@@ -11,14 +11,21 @@ This makes a tabmux tab show a status dot while [pi](https://github.com/badlogic
 
 ## Install
 
-Copy the template into pi's global extensions directory, then restart pi (or `/reload`):
+This repo is a pi package. The extension lives in `extensions/tabmux.ts` and is declared in `package.json` under `pi.extensions`.
 
 ```sh
-mkdir -p ~/.pi/agent/extensions
-cp contrib/pi/tabmux.ts ~/.pi/agent/extensions/tabmux.ts
+pi install git:github.com/junchaw/tabmux
 ```
 
-From a clone of this repo, that path is relative to the repo root. The file must be named `*.ts` under `~/.pi/agent/extensions/` so pi auto-discovers it.
+That adds the package to `~/.pi/agent/settings.json`:
+
+```json
+{
+  "packages": ["git:github.com/junchaw/tabmux"]
+}
+```
+
+Restart pi, or run `/reload`. If an older copy is still at `~/.pi/agent/extensions/tabmux.ts`, remove it so the dot is not updated twice.
 
 If `tabmux` is not on `PATH` when pi starts, set:
 

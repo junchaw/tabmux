@@ -1,7 +1,6 @@
 /**
- * tabmux status-dot hook for pi
+ * tabmux status-dot extension for pi.
  *
- * Copy to ~/.pi/agent/extensions/tabmux.ts (see docs/pi.md).
  * Calls `tabmux status` so this pane's tab shows:
  *   busy       red    — agent is running
  *   attention  yellow — pi is waiting on a UI prompt

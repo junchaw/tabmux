@@ -1,0 +1,16 @@
+{
+  "name": "tabmux",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Pi extension that drives tabmux status dots from agent lifecycle events",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/junchaw/tabmux.git"
+  },
+  "files": ["extensions", "README.md", "LICENSE"],
+  "pi": {
+    "extensions": ["./extensions"]
+  }
+}
