@@ -70,7 +70,7 @@ are skipped. Example: `contrib/hooks/status-idle` (placeholder; appends to `/tmp
 
 To drive the dot from an agent automatically:
 
-- [pi](https://github.com/badlogic/pi-mono): `docs/pi.md` (template: `contrib/pi/tabmux.ts`)
+- [pi](https://github.com/badlogic/pi-mono): `docs/pi.md` (`pi install git:github.com/junchaw/tabmux`)
 - [Claude Code](https://code.claude.com/docs/en/hooks-guide): `docs/claude.md` (template: `contrib/claude/`)
 
 
